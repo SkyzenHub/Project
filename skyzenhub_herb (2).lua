@@ -3,6 +3,7 @@ local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
 local VIM = game:GetService("VirtualInputManager")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
@@ -10,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS (edit here)
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB (Herb Auto Collect)"
+local TITLE = "SKYZENHUB - Herb"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -22,8 +23,11 @@ local CONFIG = {
     TWEEN_SPEED = 150,   -- 10 - 500
     SCAN_DELAY = 100,    -- ms, 0 - 1000
     PURGE = false,
+    PROMPT_UP = 100,     -- px, moves the on-screen herb button up (0 - 300)
+    USE_E_KEY = true,    -- fast virtual E key (can hide the phone controls)
+    ANTI_AFK = true,
     ESP_HERB = false,
-    MEDITATE = false,
+    ESP_PLAYERS = false,
     BREAKTHROUGH = false,
     BT_INTERVAL = 3,     -- seconds, 1 - 60
     BT_DELAY = 3,        -- seconds the minigame takes before the result is sent, 1 - 15
@@ -35,8 +39,12 @@ local TIERS = { 1000, 100, 10, 1 }
 -- AUTO SAVE
 ------------------------------------------------------------
 local SAVE_FILE = "SkyZenHub_Herb.json"
-local SAVE_KEYS = {"TWEEN_SPEED", "SCAN_DELAY", "BT_INTERVAL", "BT_DELAY"}
+local SAVE_KEYS = {
+    "FARM", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "PURGE", "ANTI_AFK",
+    "TWEEN_SPEED", "SCAN_DELAY", "BT_INTERVAL", "BT_DELAY", "USE_E_KEY", "PROMPT_UP",
+}
 local ConfigLocked = false
+local READY = false -- becomes true only after the loading screen has finished
 
 local function LoadConfig()
     if not (isfile and readfile) then return end
@@ -74,12 +82,12 @@ LoadConfig()
 -- HERB LOGIC
 ------------------------------------------------------------
 local farmId = 0
-local HAS_FIRE_PROMPT = type(fireproximityprompt) == "function"
 
 local hooked = {}
 local function hookPrompt(obj)
     if obj:IsA("ProximityPrompt") and obj.Name == "CollectHerbPrompt" then
         obj.HoldDuration = 0
+        obj.RequiresLineOfSight = false
     end
 end
 
@@ -88,6 +96,28 @@ local function hookSpots(spots)
     hooked[spots] = true
     for _, d in ipairs(spots:GetDescendants()) do hookPrompt(d) end
     spots.DescendantAdded:Connect(hookPrompt)
+end
+
+-- Moves the on-screen herb (E) button up so it does not sit under your thumb
+local function applyPromptUi(obj)
+    if obj:IsA("ProximityPrompt") and obj.Name == "CollectHerbPrompt" then
+        obj.UIOffset = Vector2.new(0, -CONFIG.PROMPT_UP)
+    end
+end
+
+local function refreshPromptUi()
+    local spots = workspace:FindFirstChild("HerbSpots")
+    if not spots then return end
+    for _, d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
+end
+
+local function setupPromptUi()
+    task.spawn(function()
+        local spots = workspace:WaitForChild("HerbSpots", 15)
+        if not spots then return end
+        for _, d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
+        spots.DescendantAdded:Connect(applyPromptUi)
+    end)
 end
 
 local function purgeMap(spots)
@@ -134,10 +164,13 @@ local function moveTo(hrp, pos, id)
     return true
 end
 
+local skipUntil = {}
+
 local function findTarget(spots)
     for _, tier in ipairs(TIERS) do
         for _, spot in ipairs(spots:GetChildren()) do
-            if spot.Parent and spot:GetAttribute("HerbYear") == tier then
+            if spot.Parent and spot:GetAttribute("HerbYear") == tier
+                and not (skipUntil[spot] and skipUntil[spot] > os.clock()) then
                 local prompt = spot:FindFirstChild("CollectHerbPrompt", true)
                 local pos = getPos(spot)
                 if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos then
@@ -166,17 +199,40 @@ local function farmLoop(id)
                 local char = LocalPlayer.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then
-                    if moveTo(hrp, pos, id) and CONFIG.FARM and farmId == id
-                        and prompt.Parent and prompt.Enabled then
-                        if HAS_FIRE_PROMPT then
-                            pcall(fireproximityprompt, prompt)
-                        else
-                            -- fallback only for executors without fireproximityprompt
-                            VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                            task.wait(0.02)
-                            VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    if moveTo(hrp, pos, id) and CONFIG.FARM and farmId == id then
+                        task.wait(CONFIG.USE_E_KEY and 0.05 or 0.2) -- let the server catch up with the new position
+
+                        -- try up to 4 times until the herb is really gone
+                        local collected = false
+                        for _ = 1, 4 do
+                            if not (CONFIG.FARM and farmId == id) then break end
+                            if not (spot.Parent and prompt.Parent and prompt.Enabled) then
+                                collected = true
+                                break
+                            end
+                            pcall(function() fireproximityprompt(prompt) end)
+                            if CONFIG.USE_E_KEY then
+                                -- fast E press: one frame is enough because the prompt has no hold time
+                                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                                task.wait()
+                                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                                task.wait(0.1)
+                            else
+                                -- simulate a hold on the prompt itself (no keyboard input, so the phone controls stay visible)
+                                pcall(function()
+                                    prompt:InputHoldBegin()
+                                    task.wait(0.05)
+                                    prompt:InputHoldEnd()
+                                end)
+                                task.wait(0.25)
+                            end
                         end
-                        task.wait(0.1)
+
+                        -- still there after 4 tries: skip this herb for a few seconds
+                        if not collected and CONFIG.FARM and farmId == id
+                            and spot.Parent and prompt.Parent and prompt.Enabled then
+                            skipUntil[spot] = os.clock() + 5
+                        end
                     end
                 else
                     task.wait(0.5)
@@ -193,10 +249,6 @@ local function setFarm(v)
     farmId = farmId + 1
     if v then
         task.spawn(farmLoop, farmId)
-    else
-        if not HAS_FIRE_PROMPT then
-            pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-        end
     end
 end
 
@@ -294,64 +346,181 @@ local function setEspHerb(v)
     end)
 end
 
+-- ESP Player (highlight + name + distance)
+local espPlayers = {}
+local espPlayerChars = {}
+local espPlayerAdded, espPlayerRemoving, espPlayerLoop
+local PLAYER_ESP_COLOR = Color3.fromRGB(64, 224, 255)
+
+local function removePlayerEsp(plr)
+    local d = espPlayers[plr]
+    if d then
+        pcall(function() d.hl:Destroy() end)
+        pcall(function() d.bb:Destroy() end)
+        espPlayers[plr] = nil
+    end
+end
+
+local function addPlayerEsp(plr)
+    if plr == LocalPlayer then return end
+    removePlayerEsp(plr)
+    local char = plr.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local hl = Instance.new("Highlight")
+    hl.Adornee = char
+    hl.FillColor = PLAYER_ESP_COLOR
+    hl.FillTransparency = 0.8
+    hl.OutlineColor = PLAYER_ESP_COLOR
+    hl.OutlineTransparency = 0.1
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = char
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 200, 0, 24)
+    bb.Adornee = root
+    bb.AlwaysOnTop = true
+    bb.StudsOffsetWorldSpace = Vector3.new(0, 4, 0)
+    bb.Parent = char
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    label.TextColor3 = PLAYER_ESP_COLOR
+    label.TextStrokeTransparency = 0
+    label.Text = plr.Name
+    label.Parent = bb
+
+    espPlayers[plr] = { hl = hl, bb = bb, label = label }
+end
+
+local function setEspPlayers(v)
+    CONFIG.ESP_PLAYERS = v
+
+    if espPlayerAdded then espPlayerAdded:Disconnect() espPlayerAdded = nil end
+    if espPlayerRemoving then espPlayerRemoving:Disconnect() espPlayerRemoving = nil end
+    if espPlayerLoop then espPlayerLoop:Disconnect() espPlayerLoop = nil end
+    for _, c in pairs(espPlayerChars) do c:Disconnect() end
+    espPlayerChars = {}
+    local list = {}
+    for plr in pairs(espPlayers) do list[#list + 1] = plr end
+    for _, plr in ipairs(list) do removePlayerEsp(plr) end
+
+    if not v then return end
+
+    local function track(plr)
+        if plr == LocalPlayer then return end
+        espPlayerChars[plr] = plr.CharacterAdded:Connect(function()
+            task.wait(1)
+            if CONFIG.ESP_PLAYERS then addPlayerEsp(plr) end
+        end)
+        if plr.Character then addPlayerEsp(plr) end
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do track(plr) end
+    espPlayerAdded = Players.PlayerAdded:Connect(track)
+    espPlayerRemoving = Players.PlayerRemoving:Connect(function(plr)
+        removePlayerEsp(plr)
+        if espPlayerChars[plr] then
+            espPlayerChars[plr]:Disconnect()
+            espPlayerChars[plr] = nil
+        end
+    end)
+
+    local acc = 0
+    espPlayerLoop = RunService.Heartbeat:Connect(function(dt)
+        acc = acc + dt
+        if acc < 0.2 then return end
+        acc = 0
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        for plr, d in pairs(espPlayers) do
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root and myRoot and d.label.Parent then
+                d.label.Text = plr.Name .. " | " .. math.floor((root.Position - myRoot.Position).Magnitude) .. "m"
+            end
+        end
+    end)
+end
+
 -- Cultivation (remotes found with Cobalt)
 local function getCultivationEvent(name)
     local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
     return folder and folder:FindFirstChild(name)
 end
 
-local function fireMeditate()
-    local ev = getCultivationEvent("StartMeditate")
-    if ev then pcall(function() ev:FireServer() end) end
-end
-
-local function setMeditate(v)
-    CONFIG.MEDITATE = v
-    if v then fireMeditate() end
-end
-
--- start meditating again after every respawn while Auto Meditate is ON
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(2)
-    if CONFIG.ENABLED and CONFIG.MEDITATE then fireMeditate() end
-end)
-
-local function copyCultivationRemotes()
-    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
-    local lines = {}
-    if folder then
-        for _, c in ipairs(folder:GetChildren()) do
-            lines[#lines + 1] = c.Name .. " (" .. c.ClassName .. ")"
-        end
-    else
-        lines[1] = "CultivationEvents not found"
-    end
-    local text = table.concat(lines, "\n")
-    if setclipboard then pcall(setclipboard, text) end
-    print("[SkyZenHub] Cultivation remotes:\n" .. text)
-end
-
 local btId = 0
+local btConn = nil
+local miniSeen = false
+
+local function sendBreakthroughResult()
+    local ev = getCultivationEvent("BreakthroughMinigameResult")
+    if ev then pcall(function() ev:FireServer(true) end) end
+end
+
 local function setBreakthrough(v)
     CONFIG.BREAKTHROUGH = v
     btId = btId + 1
+    if btConn then
+        btConn:Disconnect()
+        btConn = nil
+    end
     if not v then return end
     local id = btId
+
+    -- the server tells the client when the minigame starts: answer it after the delay
+    local miniEv = getCultivationEvent("StartBreakthroughMinigame")
+    if miniEv then
+        btConn = miniEv.OnClientEvent:Connect(function()
+            miniSeen = true
+            task.spawn(function()
+                task.wait(CONFIG.BT_DELAY)
+                if CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
+                    sendBreakthroughResult()
+                end
+            end)
+        end)
+    end
+
     task.spawn(function()
         while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id do
-            -- 1) start the breakthrough
+            miniSeen = false
             local startEv = getCultivationEvent("Breakthrough")
             if startEv then pcall(function() startEv:FireServer() end) end
 
-            -- 2) wait while the minigame runs, then send the result
-            task.wait(CONFIG.BT_DELAY)
-            local resultEv = getCultivationEvent("BreakthroughMinigameResult")
-            if resultEv then pcall(function() resultEv:FireServer(true) end) end
+            -- wait up to 3 s for the minigame signal
+            local waited = 0
+            while not miniSeen and waited < 3 and CONFIG.BREAKTHROUGH and btId == id do
+                task.wait(0.1)
+                waited = waited + 0.1
+            end
+
+            if miniSeen then
+                task.wait(CONFIG.BT_DELAY + 1) -- result is sent by the listener above
+            elseif CONFIG.BREAKTHROUGH and btId == id then
+                -- no signal received: fall back to a timed result
+                task.wait(CONFIG.BT_DELAY)
+                sendBreakthroughResult()
+            end
 
             task.wait(CONFIG.BT_INTERVAL)
         end
     end)
 end
+
+-- Anti AFK (only reacts when Roblox is about to mark the player idle)
+LocalPlayer.Idled:Connect(function()
+    if READY and CONFIG.ANTI_AFK and CONFIG.ENABLED then
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end
+end)
 
 ------------------------------------------------------------
 -- UI
@@ -813,36 +982,32 @@ local function addStepper(page, name, min, max, step, default, callback)
     btn("+", -40, step)
 end
 
-local function addButton(page, name, callback)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, -6, 0, 30)
-    b.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    b.Text = name
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 13
-    b.TextColor3 = Color3.new(1, 1, 1)
-    b.Parent = page
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-    local s = Instance.new("UIStroke", b)
-    s.Color = GREY
-    b.MouseButton1Click:Connect(function() pcall(callback) end)
-end
-
 -- Tab Farm
 local FarmTab = createTab("Farm")
-addToggle(FarmTab, "Auto Farm Herb", CONFIG.FARM, setFarm)
-addToggle(FarmTab, "ESP Herb (Tier + Distance)", CONFIG.ESP_HERB, setEspHerb)
-addStepper(FarmTab, "Tween Speed", 10, 500, 10, CONFIG.TWEEN_SPEED, function(v) CONFIG.TWEEN_SPEED = v end)
-addStepper(FarmTab, "Scan Delay (ms)", 0, 1000, 50, CONFIG.SCAN_DELAY, function(v) CONFIG.SCAN_DELAY = v end)
-addToggle(FarmTab, "Purge Map (reduce lag)", CONFIG.PURGE, function(v) CONFIG.PURGE = v end)
+addToggle(FarmTab, "Auto Herb", CONFIG.FARM, setFarm)
+addStepper(FarmTab, "Move Speed", 10, 500, 10, CONFIG.TWEEN_SPEED, function(v) CONFIG.TWEEN_SPEED = v end)
+addStepper(FarmTab, "Search Delay (ms)", 0, 1000, 50, CONFIG.SCAN_DELAY, function(v) CONFIG.SCAN_DELAY = v end)
+addToggle(FarmTab, "Reduce Lag", CONFIG.PURGE, function(v) CONFIG.PURGE = v end)
+addToggle(FarmTab, "Use E Key", CONFIG.USE_E_KEY, function(v) CONFIG.USE_E_KEY = v end)
+addStepper(FarmTab, "Herb Button Up (px)", 0, 300, 20, CONFIG.PROMPT_UP, function(v)
+    CONFIG.PROMPT_UP = v
+    refreshPromptUi()
+end)
+
+-- Tab ESP
+local EspTab = createTab("ESP")
+addToggle(EspTab, "ESP Herb", CONFIG.ESP_HERB, setEspHerb)
+addToggle(EspTab, "ESP Player", CONFIG.ESP_PLAYERS, setEspPlayers)
 
 -- Tab Cultivate
 local CultTab = createTab("Cultivate")
-addToggle(CultTab, "Auto Meditate", CONFIG.MEDITATE, setMeditate)
 addToggle(CultTab, "Auto Breakthrough", CONFIG.BREAKTHROUGH, setBreakthrough)
-addStepper(CultTab, "Minigame Delay (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
-addStepper(CultTab, "Breakthrough Interval (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
-addButton(CultTab, "Copy Remote List (debug)", copyCultivationRemotes)
+addStepper(CultTab, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
+addStepper(CultTab, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
+
+-- Tab Misc
+local MiscTab = createTab("Misc")
+addToggle(MiscTab, "Anti AFK", CONFIG.ANTI_AFK, function(v) CONFIG.ANTI_AFK = v end)
 
 selectTab("Farm")
 
@@ -929,9 +1094,8 @@ yesBtn.MouseButton1Click:Connect(function()
     CONFIG.ENABLED = false
     CONFIG.FARM = false
     farmId = farmId + 1
-    if not HAS_FIRE_PROMPT then
-        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-    end
+    setEspPlayers(false)
+    setEspHerb(false)
     gui:Destroy()
 end)
 
@@ -982,3 +1146,11 @@ TS:Create(mainScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirec
 TS:Create(loader, TweenInfo.new(0.35), {GroupTransparency = 1}):Play()
 task.wait(0.4)
 loader:Destroy()
+
+-- Nothing runs before this point. Now restore the saved feature states.
+READY = true
+setupPromptUi()
+if CONFIG.FARM then setFarm(true) end
+if CONFIG.ESP_HERB then setEspHerb(true) end
+if CONFIG.ESP_PLAYERS then setEspPlayers(true) end
+if CONFIG.BREAKTHROUGH then setBreakthrough(true) end
