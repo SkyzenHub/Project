@@ -4,7 +4,6 @@ local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local VIM = game:GetService("VirtualInputManager")
-local VirtualUser = game:GetService("VirtualUser")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
@@ -27,7 +26,7 @@ local CONFIG = {
     MEDITATE = false,
     BREAKTHROUGH = false,
     BT_INTERVAL = 3,     -- seconds, 1 - 60
-    ANTI_AFK = true,
+    BT_DELAY = 3,        -- seconds the minigame takes before the result is sent, 1 - 15
 }
 
 local TIERS = { 1000, 100, 10, 1 }
@@ -36,7 +35,7 @@ local TIERS = { 1000, 100, 10, 1 }
 -- AUTO SAVE
 ------------------------------------------------------------
 local SAVE_FILE = "SkyZenHub_Herb.json"
-local SAVE_KEYS = {"TWEEN_SPEED", "SCAN_DELAY", "ANTI_AFK", "BT_INTERVAL"}
+local SAVE_KEYS = {"TWEEN_SPEED", "SCAN_DELAY", "BT_INTERVAL", "BT_DELAY"}
 local ConfigLocked = false
 
 local function LoadConfig()
@@ -75,6 +74,7 @@ LoadConfig()
 -- HERB LOGIC
 ------------------------------------------------------------
 local farmId = 0
+local HAS_FIRE_PROMPT = type(fireproximityprompt) == "function"
 
 local hooked = {}
 local function hookPrompt(obj)
@@ -168,10 +168,14 @@ local function farmLoop(id)
                 if hrp then
                     if moveTo(hrp, pos, id) and CONFIG.FARM and farmId == id
                         and prompt.Parent and prompt.Enabled then
-                        pcall(function() fireproximityprompt(prompt) end)
-                        VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                        task.wait(0.02)
-                        VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                        if HAS_FIRE_PROMPT then
+                            pcall(fireproximityprompt, prompt)
+                        else
+                            -- fallback only for executors without fireproximityprompt
+                            VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                            task.wait(0.02)
+                            VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                        end
                         task.wait(0.1)
                     end
                 else
@@ -190,7 +194,9 @@ local function setFarm(v)
     if v then
         task.spawn(farmLoop, farmId)
     else
-        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+        if not HAS_FIRE_PROMPT then
+            pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+        end
     end
 end
 
@@ -310,6 +316,21 @@ LocalPlayer.CharacterAdded:Connect(function()
     if CONFIG.ENABLED and CONFIG.MEDITATE then fireMeditate() end
 end)
 
+local function copyCultivationRemotes()
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    local lines = {}
+    if folder then
+        for _, c in ipairs(folder:GetChildren()) do
+            lines[#lines + 1] = c.Name .. " (" .. c.ClassName .. ")"
+        end
+    else
+        lines[1] = "CultivationEvents not found"
+    end
+    local text = table.concat(lines, "\n")
+    if setclipboard then pcall(setclipboard, text) end
+    print("[SkyZenHub] Cultivation remotes:\n" .. text)
+end
+
 local btId = 0
 local function setBreakthrough(v)
     CONFIG.BREAKTHROUGH = v
@@ -318,40 +339,19 @@ local function setBreakthrough(v)
     local id = btId
     task.spawn(function()
         while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id do
-            local ev = getCultivationEvent("BreakthroughMinigameResult")
-            if ev then pcall(function() ev:FireServer(true) end) end
+            -- 1) start the breakthrough
+            local startEv = getCultivationEvent("Breakthrough")
+            if startEv then pcall(function() startEv:FireServer() end) end
+
+            -- 2) wait while the minigame runs, then send the result
+            task.wait(CONFIG.BT_DELAY)
+            local resultEv = getCultivationEvent("BreakthroughMinigameResult")
+            if resultEv then pcall(function() resultEv:FireServer(true) end) end
+
             task.wait(CONFIG.BT_INTERVAL)
         end
     end)
 end
-
--- Anti AFK
-local function antiAfkClick()
-    pcall(function()
-        local cam = workspace.CurrentCamera
-        VirtualUser:Button2Down(Vector2.new(0, 0), cam.CFrame)
-        task.wait(1)
-        VirtualUser:Button2Up(Vector2.new(0, 0), cam.CFrame)
-    end)
-end
-
-LocalPlayer.Idled:Connect(function()
-    if CONFIG.ANTI_AFK and CONFIG.ENABLED then antiAfkClick() end
-end)
-
-task.spawn(function()
-    local t = 600
-    while CONFIG.ENABLED do
-        task.wait(1)
-        if CONFIG.ANTI_AFK then
-            t = t - 1
-            if t <= 0 then
-                antiAfkClick()
-                t = 600
-            end
-        end
-    end
-end)
 
 ------------------------------------------------------------
 -- UI
@@ -461,7 +461,7 @@ loader.Position = UDim2.new(0.5, 0, 0.5, 0)
 loader.Size = UDim2.new(0, 280, 0, 170)
 loader.BackgroundTransparency = 1
 loader.BorderSizePixel = 0
-loader.Active = true
+loader.Active = false
 loader.ZIndex = 50
 loader.Parent = gui
 
@@ -813,6 +813,21 @@ local function addStepper(page, name, min, max, step, default, callback)
     btn("+", -40, step)
 end
 
+local function addButton(page, name, callback)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    b.Text = name
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Parent = page
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", b)
+    s.Color = GREY
+    b.MouseButton1Click:Connect(function() pcall(callback) end)
+end
+
 -- Tab Farm
 local FarmTab = createTab("Farm")
 addToggle(FarmTab, "Auto Farm Herb", CONFIG.FARM, setFarm)
@@ -825,11 +840,9 @@ addToggle(FarmTab, "Purge Map (reduce lag)", CONFIG.PURGE, function(v) CONFIG.PU
 local CultTab = createTab("Cultivate")
 addToggle(CultTab, "Auto Meditate", CONFIG.MEDITATE, setMeditate)
 addToggle(CultTab, "Auto Breakthrough", CONFIG.BREAKTHROUGH, setBreakthrough)
+addStepper(CultTab, "Minigame Delay (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
 addStepper(CultTab, "Breakthrough Interval (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
-
--- Tab Misc
-local MiscTab = createTab("Misc")
-addToggle(MiscTab, "Anti AFK", CONFIG.ANTI_AFK, function(v) CONFIG.ANTI_AFK = v end)
+addButton(CultTab, "Copy Remote List (debug)", copyCultivationRemotes)
 
 selectTab("Farm")
 
@@ -916,7 +929,9 @@ yesBtn.MouseButton1Click:Connect(function()
     CONFIG.ENABLED = false
     CONFIG.FARM = false
     farmId = farmId + 1
-    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+    if not HAS_FIRE_PROMPT then
+        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+    end
     gui:Destroy()
 end)
 
