@@ -18,8 +18,8 @@ local CONFIG={
  ENABLED=true,FARM=false,TWEEN_FARM=false,TWEEN_SPEED=150,SCAN_DELAY=100,PURGE=false,
  TIER_ON={[1000]=true,[100]=true,[10]=true,[1]=true},PROMPT_UP=100,ANTI_AFK=true,
  ESP_HERB=false,ESP_PLAYERS=false,BREAKTHROUGH=false,BT_INTERVAL=3,BT_DELAY=3,
- KA_ENABLED=false,KA_RANGE=50,KA_DAMAGE=100,KA_FIRE_RATE=20,KA_SPEED_MULT=5,
- KA_INSTANT=true,KA_MAX_PER_FRAME=4,KA_WHITELIST_FRIENDS=true,
+ KA_ENABLED=false,KA_RANGE=150,KA_DAMAGE=500,KA_FIRE_RATE=50,KA_SPEED_MULT=5,
+ KA_INSTANT=true,KA_MAX_PER_FRAME=8,KA_WHITELIST_FRIENDS=true,
 }
 local TIERS={1000,100,10,1}
 local function activeTiers()
@@ -575,11 +575,20 @@ local closeBtn=topBtn("X",-34)
 local line=Instance.new("Frame")
 line.Size=UDim2.new(1,-24,0,1);line.Position=UDim2.new(0,12,0,44)
 line.BackgroundColor3=GREY;line.BorderSizePixel=0;line.Parent=main
-local tabBar=Instance.new("Frame")
+
+local tabBar=Instance.new("ScrollingFrame")
 tabBar.Size=UDim2.new(1,-24,0,28);tabBar.Position=UDim2.new(0,12,0,52)
-tabBar.BackgroundTransparency=1;tabBar.Parent=main
+tabBar.BackgroundTransparency=1;tabBar.BorderSizePixel=0
+tabBar.ScrollBarThickness=0;tabBar.ScrollingDirection=Enum.ScrollingDirection.X
+tabBar.CanvasSize=UDim2.new(0,0,0,0)
+tabBar.AutomaticCanvasSize=Enum.AutomaticSize.X
+tabBar.ScrollBarImageTransparency=1
+tabBar.ElasticBehavior=Enum.ElasticBehavior.Never
+tabBar.Parent=main
 local tl=Instance.new("UIListLayout",tabBar)
 tl.FillDirection=Enum.FillDirection.Horizontal;tl.Padding=UDim.new(0,6)
+tl.SortOrder=Enum.SortOrder.LayoutOrder
+
 local pages={}
 local tabButtons={}
 local function selectTab(name)
@@ -730,13 +739,6 @@ addToggle(MiscTab,"Anti AFK",CONFIG.ANTI_AFK,function(v) CONFIG.ANTI_AFK=v end)
 
 local KillAuraTab=createTab("KillAura")
 addToggle(KillAuraTab,"Kill Aura",CONFIG.KA_ENABLED,function(v) setKillAura(v) end)
-addToggle(KillAuraTab,"Instant on Entry",CONFIG.KA_INSTANT,function(v) CONFIG.KA_INSTANT=v end)
-addToggle(KillAuraTab,"Skip ForceField",CONFIG.KA_WHITELIST_FRIENDS,function(v) CONFIG.KA_WHITELIST_FRIENDS=v end)
-addStepper(KillAuraTab,"Range (studs)",5,300,5,CONFIG.KA_RANGE,function(v) CONFIG.KA_RANGE=v end)
-addStepper(KillAuraTab,"Damage",1,10000,10,CONFIG.KA_DAMAGE,function(v) CONFIG.KA_DAMAGE=v end)
-addStepper(KillAuraTab,"Fire Rate (Hz)",1,200,5,CONFIG.KA_FIRE_RATE,function(v) CONFIG.KA_FIRE_RATE=v end)
-addStepper(KillAuraTab,"Speed Mult",1,50,1,CONFIG.KA_SPEED_MULT,function(v) CONFIG.KA_SPEED_MULT=v end)
-addStepper(KillAuraTab,"Max Hit / Frame",1,20,1,CONFIG.KA_MAX_PER_FRAME,function(v) CONFIG.KA_MAX_PER_FRAME=v end)
 
 selectTab("Farm")
 
