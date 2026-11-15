@@ -1,855 +1,1337 @@
-local Players=game:GetService("Players")
-local RunService=game:GetService("RunService")
-local UIS=game:GetService("UserInputService")
-local TS=game:GetService("TweenService")
-local HttpService=game:GetService("HttpService")
-local VirtualUser=game:GetService("VirtualUser")
-local VIM=game:GetService("VirtualInputManager")
-local ReplicatedStorage=game:GetService("ReplicatedStorage")
-local LocalPlayer=Players.LocalPlayer or Players.PlayerAdded:Wait()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
+local VIM = game:GetService("VirtualInputManager")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
---============================================================
--- SETTINGS  (semua on/off & angka di sini)
---============================================================
-local TITLE="SKYZENHUB - Herb v13"
-local PHOTO_URL="https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
-local LOGO_URL=PHOTO_URL
-local LOADING_URL="https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
-local LOAD_TIME=10
+------------------------------------------------------------
+-- SETTINGS
+------------------------------------------------------------
+local TITLE = "SKYZENHUB - Herb v13"
+local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
+local LOGO_URL = PHOTO_URL
+local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
+local LOAD_TIME = 10
 
-local CONFIG={
- -- master
- ENABLED=true,
- -- herb farm
- FARM=false,
- TWEEN_FARM=false,
- TWEEN_SPEED=150,
- SCAN_DELAY=100,
- PURGE=false,
- TIER_ON={[1000]=false,[100]=false,[10]=false,[1]=false},
- PROMPT_UP=100,
- -- misc
- ANTI_AFK=false,
- -- esp
- ESP_HERB=false,
- ESP_PLAYERS=false,
- -- cultivate
- BREAKTHROUGH=false,
- BT_INTERVAL=3,
- BT_DELAY=3,
- -- kill aura
- KA_ENABLED=false,
- KA_RANGE=150,
- KA_DAMAGE=500,
- KA_FIRE_RATE=50,
- KA_SPEED_MULT=5,
- KA_INSTANT=true,
- KA_MAX_PER_FRAME=8,
- KA_WHITELIST_FRIENDS=true,
+local CONFIG = {
+    ENABLED = true,
+    FARM = false,
+    TWEEN_FARM = false,
+    TWEEN_SPEED = 150,
+    SCAN_DELAY = 100,
+    PURGE = false,
+    TIER_ON = { [1000] = true, [100] = true, [10] = true, [1] = true },
+    PROMPT_UP = 100,
+    ANTI_AFK = true,
+    ESP_HERB = false,
+    ESP_PLAYERS = false,
+    BREAKTHROUGH = false,
+    BT_INTERVAL = 3,
+    BT_DELAY = 3,
+    KA_ENABLED = false,
+    KA_RANGE = 150,
+    KA_DAMAGE = 500,
+    KA_FIRE_RATE = 50,
+    KA_SPEED_MULT = 5,
+    KA_INSTANT = true,
+    KA_MAX_PER_FRAME = 8,
+    KA_WHITELIST_FRIENDS = true,
 }
 
-local TIERS={1000,100,10,1}
---============================================================
--- END SETTINGS
---============================================================
+local TIERS = { 1000, 100, 10, 1 }
 
 local function activeTiers()
- local list={}
- for _,t in ipairs(TIERS) do if CONFIG.TIER_ON[t] then list[#list+1]=t end end
- return list
+    local list = {}
+    for _, tier in ipairs(TIERS) do
+        if CONFIG.TIER_ON[tier] then list[#list + 1] = tier end
+    end
+    return list
 end
 
-local READY=false
-local farmId=0
-local hooked={}
+local READY = false
+local farmId = 0
+
+local hooked = {}
 local function hookPrompt(obj)
- if obj:IsA("ProximityPrompt") and obj.Name=="CollectHerbPrompt" then
-  obj.HoldDuration=0;obj.RequiresLineOfSight=false
- end
+    if obj:IsA("ProximityPrompt") and obj.Name == "CollectHerbPrompt" then
+        obj.HoldDuration = 0
+        obj.RequiresLineOfSight = false
+    end
 end
+
 local function hookSpots(spots)
- if hooked[spots] then return end
- hooked[spots]=true
- for _,d in ipairs(spots:GetDescendants()) do hookPrompt(d) end
- spots.DescendantAdded:Connect(hookPrompt)
+    if hooked[spots] then return end
+    hooked[spots] = true
+    for _, d in ipairs(spots:GetDescendants()) do hookPrompt(d) end
+    spots.DescendantAdded:Connect(hookPrompt)
 end
+
 local function applyPromptUi(obj)
- if obj:IsA("ProximityPrompt") and obj.Name=="CollectHerbPrompt" then
-  obj.UIOffset=Vector2.new(0,-CONFIG.PROMPT_UP)
- end
+    if obj:IsA("ProximityPrompt") and obj.Name == "CollectHerbPrompt" then
+        obj.UIOffset = Vector2.new(0, -CONFIG.PROMPT_UP)
+    end
 end
+
 local function refreshPromptUi()
- local spots=workspace:FindFirstChild("HerbSpots")
- if not spots then return end
- for _,d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
+    local spots = workspace:FindFirstChild("HerbSpots")
+    if not spots then return end
+    for _, d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
 end
+
 local function setupPromptUi()
- task.spawn(function()
-  local spots=workspace:WaitForChild("HerbSpots",15)
-  if not spots then return end
-  hookSpots(spots)
-  for _,d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
-  spots.DescendantAdded:Connect(applyPromptUi)
- end)
+    task.spawn(function()
+        local spots = workspace:WaitForChild("HerbSpots", 15)
+        if not spots then return end
+        hookSpots(spots)
+        for _, d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
+        spots.DescendantAdded:Connect(applyPromptUi)
+    end)
 end
+
 local function purgeMap(spots)
- for _,obj in ipairs(workspace:GetChildren()) do
-  if obj~=spots and obj~=workspace.CurrentCamera and obj.Name~="Terrain"
-   and not Players:GetPlayerFromCharacter(obj)
-   and (obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("Folder")) then
-   pcall(function() obj:Destroy() end)
-  end
- end
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj ~= spots
+            and obj ~= workspace.CurrentCamera
+            and obj.Name ~= "Terrain"
+            and not Players:GetPlayerFromCharacter(obj)
+            and (obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("Folder")) then
+            pcall(function() obj:Destroy() end)
+        end
+    end
 end
+
 local function getPos(obj)
- if obj:IsA("Model") then return obj:GetPivot().Position end
- if obj:IsA("BasePart") then return obj.Position end
+    if obj:IsA("Model") then return obj:GetPivot().Position end
+    if obj:IsA("BasePart") then return obj.Position end
 end
-local function findNearTarget(spots,hrp)
- for _,tier in ipairs(activeTiers()) do
-  for _,spot in ipairs(spots:GetChildren()) do
-   if spot.Parent and spot:GetAttribute("HerbYear")==tier then
-    local prompt=spot:FindFirstChild("CollectHerbPrompt",true)
-    local pos=getPos(spot)
-    if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos
-     and (pos-hrp.Position).Magnitude<=prompt.MaxActivationDistance+2 then
-     return spot,prompt,tier
+
+local function findNearTarget(spots, hrp)
+    for _, tier in ipairs(activeTiers()) do
+        for _, spot in ipairs(spots:GetChildren()) do
+            if spot.Parent and spot:GetAttribute("HerbYear") == tier then
+                local prompt = spot:FindFirstChild("CollectHerbPrompt", true)
+                local pos = getPos(spot)
+                if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos
+                    and (pos - hrp.Position).Magnitude <= prompt.MaxActivationDistance + 2 then
+                    return spot, prompt, tier
+                end
+            end
+        end
     end
-   end
-  end
- end
 end
+
 local function farmLoop(id)
- local purged=false
- while CONFIG.ENABLED and CONFIG.FARM and farmId==id do
-  local spots=workspace:FindFirstChild("HerbSpots")
-  local char=LocalPlayer.Character
-  local hrp=char and char:FindFirstChild("HumanoidRootPart")
-  if not (spots and hrp) then task.wait(1) else
-   hookSpots(spots)
-   if CONFIG.PURGE and not purged then purged=true;purgeMap(spots) end
-   local spot,prompt=findNearTarget(spots,hrp)
-   if spot then
-    pcall(function() fireproximityprompt(prompt) end)
-    VIM:SendKeyEvent(true,Enum.KeyCode.E,false,game)
-    task.wait(0.02)
-    VIM:SendKeyEvent(false,Enum.KeyCode.E,false,game)
-    task.wait(0.1)
-   else task.wait(CONFIG.SCAN_DELAY/1000) end
-  end
- end
+    local purged = false
+    while CONFIG.ENABLED and CONFIG.FARM and farmId == id do
+        local spots = workspace:FindFirstChild("HerbSpots")
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+        if not (spots and hrp) then
+            task.wait(1)
+        else
+            hookSpots(spots)
+            if CONFIG.PURGE and not purged then
+                purged = true
+                purgeMap(spots)
+            end
+
+            local spot, prompt = findNearTarget(spots, hrp)
+            if spot then
+                pcall(function() fireproximityprompt(prompt) end)
+                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                task.wait(0.02)
+                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                task.wait(0.1)
+            else
+                task.wait(CONFIG.SCAN_DELAY / 1000)
+            end
+        end
+    end
 end
+
 local function setFarm(v)
- CONFIG.FARM=v;farmId=farmId+1
- if v then task.spawn(farmLoop,farmId) end
+    CONFIG.FARM = v
+    farmId = farmId + 1
+    if v then
+        task.spawn(farmLoop, farmId)
+    end
 end
-local tweenId=0
-local skipUntil={}
-local function moveTo(hrp,pos,id)
- local cf=CFrame.new(pos+Vector3.new(0,3,0))
- local dist=(hrp.Position-cf.Position).Magnitude
- if dist<5 then hrp.CFrame=cf;return true end
- local t=math.max(dist/CONFIG.TWEEN_SPEED,0.02)
- local tw=TS:Create(hrp,TweenInfo.new(t,Enum.EasingStyle.Linear,Enum.EasingDirection.InOut),{CFrame=cf})
- local done=false
- local conn=tw.Completed:Connect(function() done=true end)
- tw:Play()
- while not done and CONFIG.TWEEN_FARM and tweenId==id do task.wait(0.01) end
- conn:Disconnect()
- if not done then tw:Cancel();return false end
- hrp.CFrame=cf;return true
+
+local tweenId = 0
+local skipUntil = {}
+
+local swordFlightEvent = nil
+local function getSwordFlight()
+    if swordFlightEvent and swordFlightEvent.Parent then return swordFlightEvent end
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    swordFlightEvent = folder and folder:FindFirstChild("SwordFlight")
+    return swordFlightEvent
 end
+
+local function moveTo(hrp, pos, id)
+    local cf = CFrame.new(pos + Vector3.new(0, 3, 0))
+    local dist = (hrp.Position - cf.Position).Magnitude
+    if dist < 5 then
+        hrp.CFrame = cf
+        return true
+    end
+
+    local t = math.max(dist / CONFIG.TWEEN_SPEED, 0.02)
+    local tw = TS:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {CFrame = cf})
+    local done = false
+    local conn = tw.Completed:Connect(function() done = true end)
+    tw:Play()
+
+    while not done and CONFIG.TWEEN_FARM and tweenId == id do
+        task.wait(0.01)
+    end
+    conn:Disconnect()
+
+    if not done then
+        tw:Cancel()
+        return false
+    end
+    hrp.CFrame = cf
+    return true
+end
+
 local function findTweenTarget(spots)
- for _,tier in ipairs(activeTiers()) do
-  for _,spot in ipairs(spots:GetChildren()) do
-   if spot.Parent and spot:GetAttribute("HerbYear")==tier
-    and not (skipUntil[spot] and skipUntil[spot]>os.clock()) then
-    local prompt=spot:FindFirstChild("CollectHerbPrompt",true)
-    local pos=getPos(spot)
-    if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos then
-     return spot,prompt,pos,tier
+    for _, tier in ipairs(activeTiers()) do
+        for _, spot in ipairs(spots:GetChildren()) do
+            if spot.Parent and spot:GetAttribute("HerbYear") == tier
+                and not (skipUntil[spot] and skipUntil[spot] > os.clock()) then
+                local prompt = spot:FindFirstChild("CollectHerbPrompt", true)
+                local pos = getPos(spot)
+                if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos then
+                    return spot, prompt, pos, tier
+                end
+            end
+        end
     end
-   end
-  end
- end
 end
+
 local function tweenLoop(id)
- local purged=false
- while CONFIG.ENABLED and CONFIG.TWEEN_FARM and tweenId==id do
-  local spots=workspace:FindFirstChild("HerbSpots")
-  if not spots then task.wait(1) else
-   hookSpots(spots)
-   if CONFIG.PURGE and not purged then purged=true;purgeMap(spots) end
-   local spot,prompt,pos=findTweenTarget(spots)
-   if spot then
-    local char=LocalPlayer.Character
-    local hrp=char and char:FindFirstChild("HumanoidRootPart")
-    if hrp then
-     if moveTo(hrp,pos,id) and CONFIG.TWEEN_FARM and tweenId==id then
-      task.wait(0.2)
-      local collected=false
-      for _=1,4 do
-       if not (CONFIG.TWEEN_FARM and tweenId==id) then break end
-       if not (spot.Parent and prompt.Parent and prompt.Enabled) then collected=true;break end
-       pcall(function() fireproximityprompt(prompt) end)
-       VIM:SendKeyEvent(true,Enum.KeyCode.E,false,game)
-       task.wait(0.02)
-       VIM:SendKeyEvent(false,Enum.KeyCode.E,false,game)
-       pcall(function() prompt:InputHoldBegin();task.wait(0.05);prompt:InputHoldEnd() end)
-       task.wait(0.25)
-      end
-      if not collected and CONFIG.TWEEN_FARM and tweenId==id
-       and spot.Parent and prompt.Parent and prompt.Enabled then
-       skipUntil[spot]=os.clock()+5
-      end
-     end
-    else task.wait(0.5) end
-   else task.wait(CONFIG.SCAN_DELAY/1000) end
-  end
- end
+    local purged = false
+    while CONFIG.ENABLED and CONFIG.TWEEN_FARM and tweenId == id do
+        local spots = workspace:FindFirstChild("HerbSpots")
+        if not spots then
+            task.wait(1)
+        else
+            hookSpots(spots)
+            if CONFIG.PURGE and not purged then
+                purged = true
+                purgeMap(spots)
+            end
+
+            local spot, prompt, pos = findTweenTarget(spots)
+            if spot then
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    if moveTo(hrp, pos, id) and CONFIG.TWEEN_FARM and tweenId == id then
+                        task.wait(0.2)
+
+                        local collected = false
+                        for _ = 1, 4 do
+                            if not (CONFIG.TWEEN_FARM and tweenId == id) then break end
+                            if not (spot.Parent and prompt.Parent and prompt.Enabled) then
+                                collected = true
+                                break
+                            end
+                            pcall(function() fireproximityprompt(prompt) end)
+                            VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                            task.wait(0.02)
+                            VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                            pcall(function()
+                                prompt:InputHoldBegin()
+                                task.wait(0.05)
+                                prompt:InputHoldEnd()
+                            end)
+                            task.wait(0.25)
+                        end
+
+                        if not collected and CONFIG.TWEEN_FARM and tweenId == id
+                            and spot.Parent and prompt.Parent and prompt.Enabled then
+                            skipUntil[spot] = os.clock() + 5
+                        end
+                    end
+                else
+                    task.wait(0.5)
+                end
+            else
+                task.wait(CONFIG.SCAN_DELAY / 1000)
+            end
+        end
+    end
 end
+
 local function setTweenFarm(v)
- CONFIG.TWEEN_FARM=v;tweenId=tweenId+1
- if v then task.spawn(tweenLoop,tweenId) end
+    CONFIG.TWEEN_FARM = v
+    tweenId = tweenId + 1
+
+    local sf = getSwordFlight()
+    if sf then
+        pcall(function() sf:FireServer(v) end)
+    end
+
+    if v then
+        task.spawn(tweenLoop, tweenId)
+    end
 end
-local espHerbs={}
-local espLoopId=0
-local TIER_COLORS={[1000]=Color3.fromRGB(255,215,0),[100]=Color3.fromRGB(180,90,255),[10]=Color3.fromRGB(80,160,255),[1]=Color3.fromRGB(90,255,120)}
+
+-- ESP Herb
+local espHerbs = {}
+local espLoopId = 0
+local TIER_COLORS = {
+    [1000] = Color3.fromRGB(255, 215, 0),
+    [100] = Color3.fromRGB(180, 90, 255),
+    [10] = Color3.fromRGB(80, 160, 255),
+    [1] = Color3.fromRGB(90, 255, 120),
+}
+
 local function clearEspHerbs()
- for _,d in pairs(espHerbs) do pcall(function() d.bb:Destroy() end) end
- espHerbs={}
+    for _, d in pairs(espHerbs) do
+        pcall(function() d.bb:Destroy() end)
+    end
+    espHerbs = {}
 end
-local function addHerbEsp(spot,tier)
- local adornee=spot:IsA("BasePart") and spot or spot:FindFirstChildWhichIsA("BasePart",true)
- if not adornee then return end
- local bb=Instance.new("BillboardGui")
- bb.Name="HerbESP";bb.Size=UDim2.new(0,160,0,24);bb.AlwaysOnTop=true
- bb.StudsOffsetWorldSpace=Vector3.new(0,3,0);bb.Adornee=adornee;bb.Parent=adornee
- local label=Instance.new("TextLabel")
- label.Size=UDim2.new(1,0,1,0);label.BackgroundTransparency=1
- label.Font=Enum.Font.GothamBold;label.TextSize=13
- label.TextColor3=TIER_COLORS[tier] or Color3.new(1,1,1)
- label.TextStrokeTransparency=0;label.Text="Tier "..tostring(tier);label.Parent=bb
- espHerbs[spot]={bb=bb,label=label}
+
+local function addHerbEsp(spot, tier)
+    local adornee = spot:IsA("BasePart") and spot or spot:FindFirstChildWhichIsA("BasePart", true)
+    if not adornee then return end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "HerbESP"
+    bb.Size = UDim2.new(0, 160, 0, 24)
+    bb.AlwaysOnTop = true
+    bb.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+    bb.Adornee = adornee
+    bb.Parent = adornee
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    label.TextColor3 = TIER_COLORS[tier] or Color3.new(1, 1, 1)
+    label.TextStrokeTransparency = 0
+    label.Text = "Tier " .. tostring(tier)
+    label.Parent = bb
+
+    espHerbs[spot] = { bb = bb, label = label }
 end
+
 local function setEspHerb(v)
- CONFIG.ESP_HERB=v;espLoopId=espLoopId+1;clearEspHerbs()
- if not v then return end
- local id=espLoopId
- task.spawn(function()
-  while CONFIG.ENABLED and CONFIG.ESP_HERB and espLoopId==id do
-   local spots=workspace:FindFirstChild("HerbSpots")
-   if spots then
-    local char=LocalPlayer.Character
-    local myRoot=char and char:FindFirstChild("HumanoidRootPart")
-    local seen={}
-    for _,spot in ipairs(spots:GetChildren()) do
-     local tier=spot:GetAttribute("HerbYear")
-     local prompt=tier and spot:FindFirstChild("CollectHerbPrompt",true)
-     if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
-      seen[spot]=true
-      local d=espHerbs[spot]
-      if not d or not d.bb.Parent then addHerbEsp(spot,tier);d=espHerbs[spot] end
-      if d then
-       local text="Tier "..tostring(tier)
-       local pos=getPos(spot)
-       if myRoot and pos then text=text.." | "..math.floor((pos-myRoot.Position).Magnitude).."m" end
-       d.label.Text=text
-      end
-     end
-    end
-    local stale={}
-    for spot in pairs(espHerbs) do if not seen[spot] then stale[#stale+1]=spot end end
-    for _,spot in ipairs(stale) do pcall(function() espHerbs[spot].bb:Destroy() end);espHerbs[spot]=nil end
-   end
-   task.wait(0.3)
-  end
-  if espLoopId==id then clearEspHerbs() end
- end)
+    CONFIG.ESP_HERB = v
+    espLoopId = espLoopId + 1
+    clearEspHerbs()
+    if not v then return end
+
+    local id = espLoopId
+    task.spawn(function()
+        while CONFIG.ENABLED and CONFIG.ESP_HERB and espLoopId == id do
+            local spots = workspace:FindFirstChild("HerbSpots")
+            if spots then
+                local char = LocalPlayer.Character
+                local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+                local seen = {}
+
+                for _, spot in ipairs(spots:GetChildren()) do
+                    local tier = spot:GetAttribute("HerbYear")
+                    local prompt = tier and spot:FindFirstChild("CollectHerbPrompt", true)
+                    if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                        seen[spot] = true
+                        local d = espHerbs[spot]
+                        if not d or not d.bb.Parent then
+                            addHerbEsp(spot, tier)
+                            d = espHerbs[spot]
+                        end
+                        if d then
+                            local text = "Tier " .. tostring(tier)
+                            local pos = getPos(spot)
+                            if myRoot and pos then
+                                text = text .. " | " .. math.floor((pos - myRoot.Position).Magnitude) .. "m"
+                            end
+                            d.label.Text = text
+                        end
+                    end
+                end
+
+                local stale = {}
+                for spot in pairs(espHerbs) do
+                    if not seen[spot] then stale[#stale + 1] = spot end
+                end
+                for _, spot in ipairs(stale) do
+                    pcall(function() espHerbs[spot].bb:Destroy() end)
+                    espHerbs[spot] = nil
+                end
+            end
+            task.wait(0.3)
+        end
+        if espLoopId == id then clearEspHerbs() end
+    end)
 end
-local espPlayers={}
-local espPlayerLoop=nil
-local PLAYER_ESP_COLOR=Color3.fromRGB(64,224,255)
+
+-- ESP Player
+local espPlayers = {}
+local espPlayerLoop = nil
+local PLAYER_ESP_COLOR = Color3.fromRGB(64, 224, 255)
+
 local function removePlayerEsp(plr)
- local d=espPlayers[plr]
- if d then pcall(function() d.hl:Destroy() end);pcall(function() d.bb:Destroy() end);espPlayers[plr]=nil end
+    local d = espPlayers[plr]
+    if d then
+        pcall(function() d.hl:Destroy() end)
+        pcall(function() d.bb:Destroy() end)
+        espPlayers[plr] = nil
+    end
 end
+
 local function getEspRoot(char)
- return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChild("Head")
+    return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChild("Head")
 end
-local function buildPlayerEsp(plr,char,root)
- local hl=Instance.new("Highlight")
- hl.Adornee=char;hl.FillColor=PLAYER_ESP_COLOR;hl.FillTransparency=0.8
- hl.OutlineColor=PLAYER_ESP_COLOR;hl.OutlineTransparency=0.1
- hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop;hl.Parent=char
- local bb=Instance.new("BillboardGui")
- bb.Size=UDim2.new(0,200,0,24);bb.Adornee=root;bb.AlwaysOnTop=true
- bb.StudsOffsetWorldSpace=Vector3.new(0,4,0);bb.Parent=char
- local label=Instance.new("TextLabel")
- label.Size=UDim2.new(1,0,1,0);label.BackgroundTransparency=1
- label.Font=Enum.Font.GothamBold;label.TextSize=13;label.TextColor3=PLAYER_ESP_COLOR
- label.TextStrokeTransparency=0;label.Text=plr.Name;label.Parent=bb
- local d={hl=hl,bb=bb,label=label,char=char}
- espPlayers[plr]=d;return d
+
+local function buildPlayerEsp(plr, char, root)
+    local hl = Instance.new("Highlight")
+    hl.Adornee = char
+    hl.FillColor = PLAYER_ESP_COLOR
+    hl.FillTransparency = 0.8
+    hl.OutlineColor = PLAYER_ESP_COLOR
+    hl.OutlineTransparency = 0.1
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = char
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 200, 0, 24)
+    bb.Adornee = root
+    bb.AlwaysOnTop = true
+    bb.StudsOffsetWorldSpace = Vector3.new(0, 4, 0)
+    bb.Parent = char
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    label.TextColor3 = PLAYER_ESP_COLOR
+    label.TextStrokeTransparency = 0
+    label.Text = plr.Name
+    label.Parent = bb
+
+    local d = { hl = hl, bb = bb, label = label, char = char }
+    espPlayers[plr] = d
+    return d
 end
+
 local function setEspPlayers(v)
- CONFIG.ESP_PLAYERS=v
- if espPlayerLoop then espPlayerLoop:Disconnect();espPlayerLoop=nil end
- local list={}
- for plr in pairs(espPlayers) do list[#list+1]=plr end
- for _,plr in ipairs(list) do removePlayerEsp(plr) end
- if not v then return end
- local acc=0
- espPlayerLoop=RunService.Heartbeat:Connect(function(dt)
-  acc=acc+dt
-  if acc<0.3 then return end
-  acc=0
-  local myChar=LocalPlayer.Character
-  local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
-  local present={}
-  for _,plr in ipairs(Players:GetPlayers()) do
-   if plr~=LocalPlayer then
-    present[plr]=true
-    local char=plr.Character
-    local root=char and getEspRoot(char)
-    local d=espPlayers[plr]
-    if root then
-     if not d or d.char~=char or not d.hl.Parent or not d.bb.Parent then
-      removePlayerEsp(plr);d=buildPlayerEsp(plr,char,root)
-     end
-     if myRoot then d.label.Text=plr.Name.." | "..math.floor((root.Position-myRoot.Position).Magnitude).."m"
-     else d.label.Text=plr.Name end
-    elseif d then removePlayerEsp(plr) end
-   end
-  end
-  local gone={}
-  for plr in pairs(espPlayers) do if not present[plr] then gone[#gone+1]=plr end end
-  for _,plr in ipairs(gone) do removePlayerEsp(plr) end
- end)
+    CONFIG.ESP_PLAYERS = v
+    if espPlayerLoop then
+        espPlayerLoop:Disconnect()
+        espPlayerLoop = nil
+    end
+    local list = {}
+    for plr in pairs(espPlayers) do list[#list + 1] = plr end
+    for _, plr in ipairs(list) do removePlayerEsp(plr) end
+
+    if not v then return end
+
+    local acc = 0
+    espPlayerLoop = RunService.Heartbeat:Connect(function(dt)
+        acc = acc + dt
+        if acc < 0.3 then return end
+        acc = 0
+
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        local present = {}
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then
+                present[plr] = true
+                local char = plr.Character
+                local root = char and getEspRoot(char)
+                local d = espPlayers[plr]
+                if root then
+                    if not d or d.char ~= char or not d.hl.Parent or not d.bb.Parent then
+                        removePlayerEsp(plr)
+                        d = buildPlayerEsp(plr, char, root)
+                    end
+                    if myRoot then
+                        d.label.Text = plr.Name .. " | " .. math.floor((root.Position - myRoot.Position).Magnitude) .. "m"
+                    else
+                        d.label.Text = plr.Name
+                    end
+                elseif d then
+                    removePlayerEsp(plr)
+                end
+            end
+        end
+
+        local gone = {}
+        for plr in pairs(espPlayers) do
+            if not present[plr] then gone[#gone + 1] = plr end
+        end
+        for _, plr in ipairs(gone) do removePlayerEsp(plr) end
+    end)
 end
+
+-- Cultivation
 local function getCultivationEvent(name)
- local folder=ReplicatedStorage:FindFirstChild("CultivationEvents")
- return folder and folder:FindFirstChild(name)
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild(name)
 end
-local btId=0
-local btConn=nil
-local miniSeen=false
+
+local btId = 0
+local btConn = nil
+local miniSeen = false
+
 local function sendBreakthroughResult()
- local ev=getCultivationEvent("BreakthroughMinigameResult")
- if ev then pcall(function() ev:FireServer(true) end) end
+    local ev = getCultivationEvent("BreakthroughMinigameResult")
+    if ev then pcall(function() ev:FireServer(true) end) end
 end
+
 local function setBreakthrough(v)
- CONFIG.BREAKTHROUGH=v;btId=btId+1
- if btConn then btConn:Disconnect();btConn=nil end
- if not v then return end
- local id=btId
- local miniEv=getCultivationEvent("StartBreakthroughMinigame")
- if miniEv then
-  btConn=miniEv.OnClientEvent:Connect(function()
-   miniSeen=true
-   task.spawn(function()
-    task.wait(CONFIG.BT_DELAY)
-    if CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId==id then sendBreakthroughResult() end
-   end)
-  end)
- end
- task.spawn(function()
-  while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId==id do
-   miniSeen=false
-   local startEv=getCultivationEvent("Breakthrough")
-   if startEv then pcall(function() startEv:FireServer() end) end
-   local waited=0
-   while not miniSeen and waited<3 and CONFIG.BREAKTHROUGH and btId==id do
-    task.wait(0.1);waited=waited+0.1
-   end
-   if miniSeen then task.wait(CONFIG.BT_DELAY+1)
-   elseif CONFIG.BREAKTHROUGH and btId==id then task.wait(CONFIG.BT_DELAY);sendBreakthroughResult() end
-   task.wait(CONFIG.BT_INTERVAL)
-  end
- end)
+    CONFIG.BREAKTHROUGH = v
+    btId = btId + 1
+    if btConn then
+        btConn:Disconnect()
+        btConn = nil
+    end
+    if not v then return end
+    local id = btId
+
+    local miniEv = getCultivationEvent("StartBreakthroughMinigame")
+    if miniEv then
+        btConn = miniEv.OnClientEvent:Connect(function()
+            miniSeen = true
+            task.spawn(function()
+                task.wait(CONFIG.BT_DELAY)
+                if CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
+                    sendBreakthroughResult()
+                end
+            end)
+        end)
+    end
+
+    task.spawn(function()
+        while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id do
+            miniSeen = false
+            local startEv = getCultivationEvent("Breakthrough")
+            if startEv then pcall(function() startEv:FireServer() end) end
+
+            local waited = 0
+            while not miniSeen and waited < 3 and CONFIG.BREAKTHROUGH and btId == id do
+                task.wait(0.1)
+                waited = waited + 0.1
+            end
+
+            if miniSeen then
+                task.wait(CONFIG.BT_DELAY + 1)
+            elseif CONFIG.BREAKTHROUGH and btId == id then
+                task.wait(CONFIG.BT_DELAY)
+                sendBreakthroughResult()
+            end
+
+            task.wait(CONFIG.BT_INTERVAL)
+        end
+    end)
 end
 
+-- Kill Aura (multi-target)
 local function getCombatEvent()
- local folder=ReplicatedStorage:FindFirstChild("CultivationEvents")
- return folder and folder:FindFirstChild("CombatHit")
-end
-local kaId=0
-local kaLastTarget=nil
-local function kaGetRoot(plr)
- local char=plr.Character
- if not char then return nil end
- return char:FindFirstChild("HumanoidRootPart")
-end
-local function kaHasForceField(plr)
- local char=plr.Character
- if not char then return false end
- return char:FindFirstChildOfClass("ForceField")~=nil
-end
-local function kaFindTarget()
- local myRoot=kaGetRoot(LocalPlayer)
- if not myRoot then return nil,0 end
- local best,bestDist=nil,CONFIG.KA_RANGE
- for _,plr in ipairs(Players:GetPlayers()) do
-  if plr~=LocalPlayer then
-   if not (CONFIG.KA_WHITELIST_FRIENDS and kaHasForceField(plr)) then
-    local root=kaGetRoot(plr)
-    if root then
-     local d=(root.Position-myRoot.Position).Magnitude
-     if d<=bestDist then best,bestDist=plr,d end
-    end
-   end
-  end
- end
- return best,bestDist
-end
-local function kaFire(target)
- local ev=getCombatEvent()
- if ev then pcall(function() ev:FireServer(target,CONFIG.KA_DAMAGE) end) end
-end
-local function kaLoop(id)
- local accum=0
- while CONFIG.ENABLED and CONFIG.KA_ENABLED and kaId==id do
-  local target=kaFindTarget()
-  if not target then
-   kaLastTarget=nil;accum=0;task.wait(0.1)
-  else
-   local effectiveHz=CONFIG.KA_FIRE_RATE*CONFIG.KA_SPEED_MULT
-   local interval=1/effectiveHz
-   if CONFIG.KA_INSTANT and target~=kaLastTarget then
-    kaFire(target);kaLastTarget=target;accum=0;task.wait(interval)
-   else
-    kaLastTarget=target
-    local dt=task.wait(interval) or interval
-    accum=accum+(dt>0 and dt or interval)
-    if accum>=interval then
-     local pending=math.floor(accum/interval)
-     if pending<1 then pending=1 end
-     if pending>CONFIG.KA_MAX_PER_FRAME then pending=CONFIG.KA_MAX_PER_FRAME end
-     accum=accum-(pending*interval)
-     for _=1,pending do kaFire(target) end
-    end
-   end
-  end
- end
-end
-local function setKillAura(v)
- CONFIG.KA_ENABLED=v;kaId=kaId+1;kaLastTarget=nil
- if v then task.spawn(kaLoop,kaId) end
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild("CombatHit")
 end
 
+local kaId = 0
+local kaLastTargets = {}
+
+local function kaGetRoot(plr)
+    local char = plr.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function kaHasForceField(plr)
+    local char = plr.Character
+    if not char then return false end
+    return char:FindFirstChildOfClass("ForceField") ~= nil
+end
+
+local function kaFindTargets()
+    local myRoot = kaGetRoot(LocalPlayer)
+    if not myRoot then return {} end
+    local list = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            if not (CONFIG.KA_WHITELIST_FRIENDS and kaHasForceField(plr)) then
+                local root = kaGetRoot(plr)
+                if root then
+                    local d = (root.Position - myRoot.Position).Magnitude
+                    if d <= CONFIG.KA_RANGE then
+                        list[#list + 1] = { plr = plr, dist = d }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.dist < b.dist end)
+    return list
+end
+
+local function kaFire(target)
+    local ev = getCombatEvent()
+    if ev then
+        pcall(function() ev:FireServer(target, CONFIG.KA_DAMAGE) end)
+    end
+end
+
+local function kaLoop(id)
+    local accum = 0
+    while CONFIG.ENABLED and CONFIG.KA_ENABLED and kaId == id do
+        local targets = kaFindTargets()
+
+        if #targets == 0 then
+            kaLastTargets = {}
+            accum = 0
+            task.wait(0.1)
+        else
+            local effectiveHz = CONFIG.KA_FIRE_RATE * CONFIG.KA_SPEED_MULT
+            local interval = 1 / effectiveHz
+
+            if CONFIG.KA_INSTANT then
+                local seen = {}
+                for _, t in ipairs(targets) do
+                    seen[t.plr] = true
+                    if not kaLastTargets[t.plr] then
+                        kaFire(t.plr)
+                    end
+                end
+                kaLastTargets = seen
+            end
+
+            local dt = task.wait(interval) or interval
+            accum = accum + (dt > 0 and dt or interval)
+
+            if accum >= interval then
+                local pending = math.floor(accum / interval)
+                if pending < 1 then pending = 1 end
+                if pending > CONFIG.KA_MAX_PER_FRAME then pending = CONFIG.KA_MAX_PER_FRAME end
+                accum = accum - (pending * interval)
+
+                for _ = 1, pending do
+                    for _, t in ipairs(targets) do
+                        kaFire(t.plr)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function setKillAura(v)
+    CONFIG.KA_ENABLED = v
+    kaId = kaId + 1
+    kaLastTargets = {}
+    if v then
+        task.spawn(kaLoop, kaId)
+    end
+end
+
+-- Anti AFK
 LocalPlayer.Idled:Connect(function()
- if READY and CONFIG.ANTI_AFK and CONFIG.ENABLED then
-  pcall(function() VirtualUser:CaptureController();VirtualUser:ClickButton2(Vector2.new()) end)
- end
+    if READY and CONFIG.ANTI_AFK and CONFIG.ENABLED then
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end
 end)
 
-local parent=(gethui and gethui()) or game:GetService("CoreGui")
+-- UI
+local parent = (gethui and gethui()) or game:GetService("CoreGui")
 if parent:FindFirstChild("SkyzenGUI") then parent.SkyzenGUI:Destroy() end
-local RED=Color3.fromRGB(0,0,0)
-local DARK=Color3.fromRGB(10,10,14)
-local GREY=Color3.fromRGB(60,60,70)
-local gui=Instance.new("ScreenGui")
-gui.Name="SkyzenGUI";gui.ResetOnSpawn=false;gui.Parent=parent
+
+local RED = Color3.fromRGB(0, 0, 0)
+local DARK = Color3.fromRGB(10, 10, 14)
+local GREY = Color3.fromRGB(60, 60, 70)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SkyzenGUI"
+gui.ResetOnSpawn = false
+gui.Parent = parent
+
 local function isImage(data)
- if type(data)~="string" or #data<100 then return false end
- local h=data:sub(1,4)
- return h=="\137PNG" or h:sub(1,2)=="\255\216" or h=="RIFF"
-end
-local function loadImage(url,fname)
- if url=="" then return nil,"empty URL" end
- if not writefile then return nil,"no writefile" end
- local getAsset=getcustomasset or getsynasset
- if not getAsset then return nil,"no getcustomasset" end
- local data
- local req=(syn and syn.request) or request or http_request
- if req then
-  local ok,res=pcall(function() return req({Url=url,Method="GET"}) end)
-  if ok and res and isImage(res.Body) then data=res.Body end
- end
- if not data then
-  local ok,r=pcall(function() return game:HttpGet(url) end)
-  if ok and isImage(r) then data=r end
- end
- if not data then return nil,"download failed" end
- local ok3,err3=pcall(writefile,fname,data)
- if not ok3 then return nil,"writefile failed: "..tostring(err3) end
- local ok4,id=pcall(getAsset,fname)
- if not ok4 or not id then return nil,"getcustomasset failed" end
- return id
-end
-local photoId,photoErr=loadImage(PHOTO_URL,"skyzenhub_bg.png")
-if not photoId then print("[SkyZenHub] Photo failed: "..tostring(photoErr)) end
-local logoId=photoId
-if LOGO_URL~=PHOTO_URL then logoId=loadImage(LOGO_URL,"skyzenhub_logo.png") end
-local loadingId=loadImage(LOADING_URL,"skyzenhub_loading.jpg") or photoId
-local function makeLogo(obj)
- obj.BackgroundTransparency=1
- local bg=Instance.new("Frame")
- bg.Size=UDim2.new(1,0,1,0);bg.BackgroundColor3=Color3.new(1,1,1);bg.BorderSizePixel=0
- bg.ZIndex=1;bg.Parent=obj
- Instance.new("UICorner",bg).CornerRadius=UDim.new(1,0)
- local g=Instance.new("UIGradient",bg)
- g.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,RED),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(0,0,0)),ColorSequenceKeypoint.new(1,RED)})
- TS:Create(g,TweenInfo.new(3,Enum.EasingStyle.Linear,Enum.EasingDirection.In,-1),{Rotation=360}):Play()
- local st=Instance.new("UIStroke",bg)
- st.Color=RED;st.Thickness=1.5
- if logoId then
-  local img=Instance.new("ImageLabel")
-  img.Size=UDim2.new(1,-4,1,-4);img.Position=UDim2.new(0,2,0,2)
-  img.BackgroundTransparency=1;img.Image=logoId;img.ScaleType=Enum.ScaleType.Crop
-  img.ZIndex=2;img.Parent=obj
-  Instance.new("UICorner",img).CornerRadius=UDim.new(1,0)
- else
-  local t=Instance.new("TextLabel")
-  t.Size=UDim2.new(1,0,1,0);t.BackgroundTransparency=1;t.Text="SZ"
-  t.Font=Enum.Font.GothamBlack;t.TextScaled=true;t.TextColor3=Color3.new(1,1,1)
-  t.ZIndex=2;t.Parent=obj
-  Instance.new("UITextSizeConstraint",t).MaxTextSize=20
- end
+    if type(data) ~= "string" or #data < 100 then return false end
+    local h = data:sub(1, 4)
+    return h == "\137PNG" or h:sub(1, 2) == "\255\216" or h == "RIFF"
 end
 
-local loader=Instance.new("CanvasGroup")
-loader.Name="Loader";loader.AnchorPoint=Vector2.new(0.5,0.5)
-loader.Position=UDim2.new(0.5,0,0.5,0);loader.Size=UDim2.new(0,280,0,170)
-loader.BackgroundTransparency=1;loader.BorderSizePixel=0;loader.Active=false
-loader.ZIndex=50;loader.Parent=gui
-local lbg=Instance.new("Frame")
-lbg.Size=UDim2.new(1,0,1,0);lbg.BackgroundColor3=Color3.new(1,1,1)
-lbg.BorderSizePixel=0;lbg.Parent=loader
-Instance.new("UICorner",lbg).CornerRadius=UDim.new(0,14)
-local lbgGrad=Instance.new("UIGradient",lbg)
-lbgGrad.Rotation=90
-lbgGrad.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(30,30,34)),ColorSequenceKeypoint.new(1,Color3.fromRGB(6,6,10))})
-local lbgStroke=Instance.new("UIStroke",lbg)
-lbgStroke.Color=RED;lbgStroke.Thickness=1.5
-TS:Create(lbgStroke,TweenInfo.new(1,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.7}):Play()
+local function loadImage(url, fname)
+    if url == "" then return nil, "empty URL" end
+    if not writefile then return nil, "no writefile" end
+    local getAsset = getcustomasset or getsynasset
+    if not getAsset then return nil, "no getcustomasset" end
+
+    local data
+    local req = (syn and syn.request) or request or http_request
+    if req then
+        local ok, res = pcall(function() return req({Url = url, Method = "GET"}) end)
+        if ok and res and isImage(res.Body) then data = res.Body end
+    end
+    if not data then
+        local ok, r = pcall(function() return game:HttpGet(url) end)
+        if ok and isImage(r) then data = r end
+    end
+    if not data then return nil, "download failed" end
+
+    local ok3, err3 = pcall(writefile, fname, data)
+    if not ok3 then return nil, "writefile failed: " .. tostring(err3) end
+    local ok4, id = pcall(getAsset, fname)
+    if not ok4 or not id then return nil, "getcustomasset failed" end
+    return id
+end
+
+local photoId, photoErr = loadImage(PHOTO_URL, "skyzenhub_bg.png")
+if not photoId then print("[SkyZenHub] Photo failed: " .. tostring(photoErr)) end
+local logoId = photoId
+if LOGO_URL ~= PHOTO_URL then
+    logoId = loadImage(LOGO_URL, "skyzenhub_logo.png")
+end
+local loadingId = loadImage(LOADING_URL, "skyzenhub_loading.jpg") or photoId
+
+local function makeLogo(obj)
+    obj.BackgroundTransparency = 1
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3 = Color3.new(1, 1, 1)
+    bg.BorderSizePixel = 0
+    bg.ZIndex = 1
+    bg.Parent = obj
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(1, 0)
+    local g = Instance.new("UIGradient", bg)
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, RED),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, RED),
+    })
+    TS:Create(g, TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1), {Rotation = 360}):Play()
+    local st = Instance.new("UIStroke", bg)
+    st.Color = RED
+    st.Thickness = 1.5
+
+    if logoId then
+        local img = Instance.new("ImageLabel")
+        img.Size = UDim2.new(1, -4, 1, -4)
+        img.Position = UDim2.new(0, 2, 0, 2)
+        img.BackgroundTransparency = 1
+        img.Image = logoId
+        img.ScaleType = Enum.ScaleType.Crop
+        img.ZIndex = 2
+        img.Parent = obj
+        Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
+    else
+        local t = Instance.new("TextLabel")
+        t.Size = UDim2.new(1, 0, 1, 0)
+        t.BackgroundTransparency = 1
+        t.Text = "SZ"
+        t.Font = Enum.Font.GothamBlack
+        t.TextScaled = true
+        t.TextColor3 = Color3.new(1, 1, 1)
+        t.ZIndex = 2
+        t.Parent = obj
+        Instance.new("UITextSizeConstraint", t).MaxTextSize = 20
+    end
+end
+
+-- Loading Screen
+local loader = Instance.new("CanvasGroup")
+loader.Name = "Loader"
+loader.AnchorPoint = Vector2.new(0.5, 0.5)
+loader.Position = UDim2.new(0.5, 0, 0.5, 0)
+loader.Size = UDim2.new(0, 280, 0, 170)
+loader.BackgroundTransparency = 1
+loader.BorderSizePixel = 0
+loader.Active = false
+loader.ZIndex = 50
+loader.Parent = gui
+
+local lbg = Instance.new("Frame")
+lbg.Size = UDim2.new(1, 0, 1, 0)
+lbg.BackgroundColor3 = Color3.new(1, 1, 1)
+lbg.BorderSizePixel = 0
+lbg.Parent = loader
+Instance.new("UICorner", lbg).CornerRadius = UDim.new(0, 14)
+local lbgGrad = Instance.new("UIGradient", lbg)
+lbgGrad.Rotation = 90
+lbgGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 34)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 6, 10)),
+})
+local lbgStroke = Instance.new("UIStroke", lbg)
+lbgStroke.Color = RED
+lbgStroke.Thickness = 1.5
+TS:Create(lbgStroke, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.7}):Play()
+
 if loadingId then
- local lImgBg=Instance.new("ImageLabel")
- lImgBg.Size=UDim2.new(1,0,1,0);lImgBg.BackgroundTransparency=1
- lImgBg.Image=loadingId;lImgBg.ScaleType=Enum.ScaleType.Crop
- lImgBg.ImageTransparency=0.15;lImgBg.Parent=lbg
- Instance.new("UICorner",lImgBg).CornerRadius=UDim.new(0,14)
- local lShade=Instance.new("Frame")
- lShade.Size=UDim2.new(1,0,1,0);lShade.BackgroundColor3=Color3.new(1,1,1)
- lShade.BackgroundTransparency=0.4;lShade.BorderSizePixel=0;lShade.Parent=lbg
- Instance.new("UICorner",lShade).CornerRadius=UDim.new(0,14)
+    local lImgBg = Instance.new("ImageLabel")
+    lImgBg.Size = UDim2.new(1, 0, 1, 0)
+    lImgBg.BackgroundTransparency = 1
+    lImgBg.Image = loadingId
+    lImgBg.ScaleType = Enum.ScaleType.Crop
+    lImgBg.ImageTransparency = 0.15
+    lImgBg.Parent = lbg
+    Instance.new("UICorner", lImgBg).CornerRadius = UDim.new(0, 14)
+
+    local lShade = Instance.new("Frame")
+    lShade.Size = UDim2.new(1, 0, 1, 0)
+    lShade.BackgroundColor3 = Color3.new(1, 1, 1)
+    lShade.BackgroundTransparency = 0.4
+    lShade.BorderSizePixel = 0
+    lShade.Parent = lbg
+    Instance.new("UICorner", lShade).CornerRadius = UDim.new(0, 14)
 end
-local lLogo=Instance.new("Frame")
-lLogo.AnchorPoint=Vector2.new(0.5,0);lLogo.Position=UDim2.new(0.5,0,0,18)
-lLogo.Size=UDim2.new(0,56,0,56);lLogo.Parent=loader;makeLogo(lLogo)
-local lTitle=Instance.new("TextLabel")
-lTitle.Position=UDim2.new(0,0,0,82);lTitle.Size=UDim2.new(1,0,0,24)
-lTitle.BackgroundTransparency=1;lTitle.Text="SKYZENHUB";lTitle.Font=Enum.Font.GothamBlack
-lTitle.TextSize=16;lTitle.TextColor3=Color3.fromRGB(0,0,0);lTitle.Parent=loader
-local lStatus=Instance.new("TextLabel")
-lStatus.Position=UDim2.new(0,0,0,108);lStatus.Size=UDim2.new(1,0,0,18)
-lStatus.BackgroundTransparency=1;lStatus.Text="Initializing...";lStatus.Font=Enum.Font.GothamBlack
-lStatus.TextSize=13;lStatus.TextColor3=Color3.fromRGB(0,0,0);lStatus.Parent=loader
-local lBar=Instance.new("Frame")
-lBar.AnchorPoint=Vector2.new(0.5,0);lBar.Position=UDim2.new(0.5,0,0,138)
-lBar.Size=UDim2.new(0,220,0,6);lBar.BackgroundColor3=Color3.fromRGB(80,80,90)
-lBar.BorderSizePixel=0;lBar.Parent=loader
-Instance.new("UICorner",lBar).CornerRadius=UDim.new(1,0)
-local lFill=Instance.new("Frame")
-lFill.Size=UDim2.new(0,0,1,0);lFill.BackgroundColor3=RED;lFill.BorderSizePixel=0;lFill.Parent=lBar
-Instance.new("UICorner",lFill).CornerRadius=UDim.new(1,0)
-local function setProgress(p,text,dur)
- lStatus.Text=text
- TS:Create(lFill,TweenInfo.new(dur or 0.35,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Size=UDim2.new(p,0,1,0)}):Play()
+
+local lLogo = Instance.new("Frame")
+lLogo.AnchorPoint = Vector2.new(0.5, 0)
+lLogo.Position = UDim2.new(0.5, 0, 0, 18)
+lLogo.Size = UDim2.new(0, 56, 0, 56)
+lLogo.Parent = loader
+makeLogo(lLogo)
+
+local lTitle = Instance.new("TextLabel")
+lTitle.Position = UDim2.new(0, 0, 0, 82)
+lTitle.Size = UDim2.new(1, 0, 0, 24)
+lTitle.BackgroundTransparency = 1
+lTitle.Text = "SKYZENHUB"
+lTitle.Font = Enum.Font.GothamBlack
+lTitle.TextSize = 16
+lTitle.TextColor3 = Color3.fromRGB(0, 0, 0)
+lTitle.Parent = loader
+
+local lStatus = Instance.new("TextLabel")
+lStatus.Position = UDim2.new(0, 0, 0, 108)
+lStatus.Size = UDim2.new(1, 0, 0, 18)
+lStatus.BackgroundTransparency = 1
+lStatus.Text = "Initializing..."
+lStatus.Font = Enum.Font.GothamBlack
+lStatus.TextSize = 13
+lStatus.TextColor3 = Color3.fromRGB(0, 0, 0)
+lStatus.Parent = loader
+
+local lBar = Instance.new("Frame")
+lBar.AnchorPoint = Vector2.new(0.5, 0)
+lBar.Position = UDim2.new(0.5, 0, 0, 138)
+lBar.Size = UDim2.new(0, 220, 0, 6)
+lBar.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+lBar.BorderSizePixel = 0
+lBar.Parent = loader
+Instance.new("UICorner", lBar).CornerRadius = UDim.new(1, 0)
+
+local lFill = Instance.new("Frame")
+lFill.Size = UDim2.new(0, 0, 1, 0)
+lFill.BackgroundColor3 = RED
+lFill.BorderSizePixel = 0
+lFill.Parent = lBar
+Instance.new("UICorner", lFill).CornerRadius = UDim.new(1, 0)
+
+local function setProgress(p, text, dur)
+    lStatus.Text = text
+    TS:Create(lFill, TweenInfo.new(dur or 0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(p, 0, 1, 0)}):Play()
 end
-local loadStart=os.clock()
-setProgress(0.1,"Initializing...",1.2)
+
+local loadStart = os.clock()
+setProgress(0.1, "Initializing...", 1.2)
 task.wait(1.5)
 
-local main=Instance.new("Frame")
-main.Size=UDim2.new(0,340,0,280);main.Position=UDim2.new(0.5,-170,0.5,-140)
-main.BackgroundColor3=DARK;main.ClipsDescendants=true;main.Visible=false;main.Parent=gui
-Instance.new("UICorner",main).CornerRadius=UDim.new(0,12)
-local grad=Instance.new("UIGradient",main)
-grad.Rotation=90
-grad.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(30,30,34)),ColorSequenceKeypoint.new(1,Color3.fromRGB(6,6,10))})
-local stroke=Instance.new("UIStroke",main)
-stroke.Color=RED;stroke.Thickness=1.5
-TS:Create(stroke,TweenInfo.new(1.2,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.7}):Play()
-setProgress(0.3,"Loading assets...",1)
+-- Main Window
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 340, 0, 280)
+main.Position = UDim2.new(0.5, -170, 0.5, -140)
+main.BackgroundColor3 = DARK
+main.ClipsDescendants = true
+main.Visible = false
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+
+local grad = Instance.new("UIGradient", main)
+grad.Rotation = 90
+grad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 34)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 6, 10)),
+})
+
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = RED
+stroke.Thickness = 1.5
+TS:Create(stroke, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.7}):Play()
+
+setProgress(0.3, "Loading assets...", 1)
+
 if photoId then
- local bgImg=Instance.new("ImageLabel")
- bgImg.Size=UDim2.new(1,0,1,0);bgImg.BackgroundTransparency=1;bgImg.Image=photoId
- bgImg.ScaleType=Enum.ScaleType.Crop;bgImg.ZIndex=1;bgImg.Parent=main
- Instance.new("UICorner",bgImg).CornerRadius=UDim.new(0,12)
- local shade=Instance.new("Frame")
- shade.Size=UDim2.new(1,0,1,0);shade.BackgroundColor3=Color3.new(0,0,0)
- shade.BackgroundTransparency=0.45;shade.BorderSizePixel=0;shade.ZIndex=1;shade.Parent=main
- Instance.new("UICorner",shade).CornerRadius=UDim.new(0,12)
+    local bgImg = Instance.new("ImageLabel")
+    bgImg.Size = UDim2.new(1, 0, 1, 0)
+    bgImg.BackgroundTransparency = 1
+    bgImg.Image = photoId
+    bgImg.ScaleType = Enum.ScaleType.Crop
+    bgImg.ZIndex = 1
+    bgImg.Parent = main
+    Instance.new("UICorner", bgImg).CornerRadius = UDim.new(0, 12)
+
+    local shade = Instance.new("Frame")
+    shade.Size = UDim2.new(1, 0, 1, 0)
+    shade.BackgroundColor3 = Color3.new(0, 0, 0)
+    shade.BackgroundTransparency = 0.45
+    shade.BorderSizePixel = 0
+    shade.ZIndex = 1
+    shade.Parent = main
+    Instance.new("UICorner", shade).CornerRadius = UDim.new(0, 12)
 end
-setProgress(0.5,"Building interface...",1)
 
-local header=Instance.new("Frame")
-header.Size=UDim2.new(1,0,0,42);header.BackgroundTransparency=1;header.Parent=main
-local logo=Instance.new("Frame")
-logo.Size=UDim2.new(0,30,0,30);logo.Position=UDim2.new(0,10,0,6);logo.Parent=header;makeLogo(logo)
-local title=Instance.new("TextLabel")
-title.Size=UDim2.new(1,-130,1,0);title.Position=UDim2.new(0,48,0,0)
-title.BackgroundTransparency=1;title.Text=TITLE;title.Font=Enum.Font.GothamBlack
-title.TextSize=13;title.TextColor3=Color3.fromRGB(235,235,240)
-title.TextXAlignment=Enum.TextXAlignment.Left;title.Parent=header
-local function topBtn(text,x)
- local b=Instance.new("TextButton")
- b.Size=UDim2.new(0,28,0,24);b.Position=UDim2.new(1,x,0,9)
- b.BackgroundColor3=Color3.fromRGB(25,25,30);b.Text=text;b.Font=Enum.Font.GothamBold
- b.TextSize=14;b.TextColor3=Color3.new(1,1,1);b.Parent=header
- Instance.new("UICorner",b).CornerRadius=UDim.new(0,6)
- return b
+setProgress(0.5, "Building interface...", 1)
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 42)
+header.BackgroundTransparency = 1
+header.Parent = main
+
+local logo = Instance.new("Frame")
+logo.Size = UDim2.new(0, 30, 0, 30)
+logo.Position = UDim2.new(0, 10, 0, 6)
+logo.Parent = header
+makeLogo(logo)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -130, 1, 0)
+title.Position = UDim2.new(0, 48, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = TITLE
+title.Font = Enum.Font.GothamBlack
+title.TextSize = 13
+title.TextColor3 = Color3.fromRGB(235, 235, 240)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
+
+local function topBtn(text, x)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 28, 0, 24)
+    b.Position = UDim2.new(1, x, 0, 9)
+    b.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Parent = header
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
 end
-local minBtn=topBtn("-",-66)
-local closeBtn=topBtn("X",-34)
-local line=Instance.new("Frame")
-line.Size=UDim2.new(1,-24,0,1);line.Position=UDim2.new(0,12,0,44)
-line.BackgroundColor3=GREY;line.BorderSizePixel=0;line.Parent=main
+local minBtn = topBtn("-", -66)
+local closeBtn = topBtn("X", -34)
 
-local tabBar=Instance.new("ScrollingFrame")
-tabBar.Size=UDim2.new(1,-24,0,28);tabBar.Position=UDim2.new(0,12,0,52)
-tabBar.BackgroundTransparency=1;tabBar.BorderSizePixel=0
-tabBar.ScrollBarThickness=0;tabBar.ScrollingDirection=Enum.ScrollingDirection.X
-tabBar.CanvasSize=UDim2.new(0,0,0,0)
-tabBar.AutomaticCanvasSize=Enum.AutomaticSize.X
-tabBar.ScrollBarImageTransparency=1
-tabBar.ElasticBehavior=Enum.ElasticBehavior.Never
-tabBar.Parent=main
-local tl=Instance.new("UIListLayout",tabBar)
-tl.FillDirection=Enum.FillDirection.Horizontal;tl.Padding=UDim.new(0,6)
-tl.SortOrder=Enum.SortOrder.LayoutOrder
+local line = Instance.new("Frame")
+line.Size = UDim2.new(1, -24, 0, 1)
+line.Position = UDim2.new(0, 12, 0, 44)
+line.BackgroundColor3 = GREY
+line.BorderSizePixel = 0
+line.Parent = main
 
-local pages={}
-local tabButtons={}
+local tabBar = Instance.new("ScrollingFrame")
+tabBar.Size = UDim2.new(1, -24, 0, 28)
+tabBar.Position = UDim2.new(0, 12, 0, 52)
+tabBar.BackgroundTransparency = 1
+tabBar.BorderSizePixel = 0
+tabBar.ScrollBarThickness = 0
+tabBar.ScrollingDirection = Enum.ScrollingDirection.X
+tabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
+tabBar.AutomaticCanvasSize = Enum.AutomaticSize.X
+tabBar.ScrollBarImageTransparency = 1
+tabBar.ElasticBehavior = Enum.ElasticBehavior.Never
+tabBar.Parent = main
+local tl = Instance.new("UIListLayout", tabBar)
+tl.FillDirection = Enum.FillDirection.Horizontal
+tl.Padding = UDim.new(0, 6)
+tl.SortOrder = Enum.SortOrder.LayoutOrder
+
+local pages = {}
+local tabButtons = {}
+
 local function selectTab(name)
- for n,page in pairs(pages) do
-  page.Visible=(n==name)
-  tabButtons[n].BackgroundColor3=(n==name) and RED or Color3.fromRGB(25,25,30)
- end
+    for n, page in pairs(pages) do
+        page.Visible = (n == name)
+        tabButtons[n].BackgroundColor3 = (n == name) and RED or Color3.fromRGB(25, 25, 30)
+    end
 end
+
 local function createTab(name)
- local b=Instance.new("TextButton")
- b.Size=UDim2.new(0,70,1,0);b.BackgroundColor3=Color3.fromRGB(25,25,30)
- b.Text=name;b.Font=Enum.Font.GothamBold;b.TextSize=11;b.TextColor3=Color3.new(1,1,1)
- b.Parent=tabBar
- Instance.new("UICorner",b).CornerRadius=UDim.new(0,6)
- tabButtons[name]=b
- local page=Instance.new("ScrollingFrame")
- page.Size=UDim2.new(1,-24,1,-92);page.Position=UDim2.new(0,12,0,86)
- page.BackgroundTransparency=1;page.BorderSizePixel=0;page.ScrollBarThickness=3
- page.CanvasSize=UDim2.new(0,0,0,0);page.AutomaticCanvasSize=Enum.AutomaticSize.Y
- page.Visible=false;page.Parent=main
- local pageLayout=Instance.new("UIListLayout",page)
- pageLayout.SortOrder=Enum.SortOrder.LayoutOrder;pageLayout.Padding=UDim.new(0,4)
- pages[name]=page
- b.MouseButton1Click:Connect(function() selectTab(name) end)
- return page
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 70, 1, 0)
+    b.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    b.Text = name
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 11
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Parent = tabBar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    tabButtons[name] = b
+
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.new(1, -24, 1, -92)
+    page.Position = UDim2.new(0, 12, 0, 86)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 3
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.Parent = main
+    local pageLayout = Instance.new("UIListLayout", page)
+    pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    pageLayout.Padding = UDim.new(0, 4)
+    pages[name] = page
+
+    b.MouseButton1Click:Connect(function() selectTab(name) end)
+    return page
 end
-local orderCounter={}
+
+local orderCounter = {}
 local function nextOrder(page)
- orderCounter[page]=(orderCounter[page] or 0)+1
- return orderCounter[page]
-end
-local function addToggle(page,name,default,callback)
- local state=default
- local b=Instance.new("TextButton")
- b.Size=UDim2.new(1,-6,0,30);b.BackgroundColor3=Color3.fromRGB(55,55,64)
- b.BackgroundTransparency=0.1;b.Font=Enum.Font.GothamBold;b.TextSize=13
- b.TextColor3=Color3.fromRGB(220,220,225);b.LayoutOrder=nextOrder(page)
- b.Parent=page
- Instance.new("UICorner",b).CornerRadius=UDim.new(0,8)
- local s=Instance.new("UIStroke",b)
- b.Text=""
- local fill=Instance.new("Frame")
- fill.Size=UDim2.new(0,0,1,0);fill.BackgroundColor3=Color3.fromRGB(0,0,0)
- fill.BorderSizePixel=0;fill.Parent=b
- Instance.new("UICorner",fill).CornerRadius=UDim.new(0,8)
- local shine=Instance.new("UIGradient",fill)
- shine.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(95,95,105)),ColorSequenceKeypoint.new(0.3,Color3.fromRGB(0,0,0)),ColorSequenceKeypoint.new(0.7,Color3.fromRGB(0,0,0)),ColorSequenceKeypoint.new(1,Color3.fromRGB(95,95,105))})
- local shimmer=nil
- local txt=Instance.new("TextLabel")
- txt.Size=UDim2.new(1,0,1,0);txt.BackgroundTransparency=1
- txt.Font=Enum.Font.GothamBold;txt.TextSize=13;txt.TextColor3=Color3.new(1,1,1);txt.Parent=b
- local function refresh(animate)
-  txt.Text=name.."  :  "..(state and "ON" or "OFF")
-  local goalSize=UDim2.new(state and 1 or 0,0,1,0)
-  local goalColor=state and Color3.fromRGB(0,0,0) or GREY
-  if animate then
-   TS:Create(fill,TweenInfo.new(0.35,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Size=goalSize}):Play()
-   TS:Create(s,TweenInfo.new(0.35),{Color=goalColor,Thickness=state and 2.5 or 1}):Play()
-  else
-   fill.Size=goalSize;s.Color=goalColor;s.Thickness=state and 2.5 or 1
-  end
-  if state then
-   if not shimmer then
-    shine.Offset=Vector2.new(-1,0)
-    shimmer=TS:Create(shine,TweenInfo.new(1.4,Enum.EasingStyle.Linear,Enum.EasingDirection.In,-1),{Offset=Vector2.new(1,0)})
-    shimmer:Play()
-   end
-  elseif shimmer then shimmer:Cancel();shimmer=nil end
- end
- refresh(false)
- b.MouseButton1Click:Connect(function()
-  state=not state;refresh(true);pcall(callback,state)
- end)
-end
-local function addStepper(page,name,min,max,step,default,callback)
- local value=default
- local f=Instance.new("Frame")
- f.Size=UDim2.new(1,-6,0,34);f.BackgroundColor3=Color3.fromRGB(18,18,24)
- f.BackgroundTransparency=0.25;f.LayoutOrder=nextOrder(page);f.Parent=page
- Instance.new("UICorner",f).CornerRadius=UDim.new(0,8)
- local fs=Instance.new("UIStroke",f)
- fs.Color=GREY
- local lbl=Instance.new("TextLabel")
- lbl.Size=UDim2.new(1,-90,1,0);lbl.Position=UDim2.new(0,10,0,0)
- lbl.BackgroundTransparency=1;lbl.Font=Enum.Font.GothamBold;lbl.TextSize=13
- lbl.TextColor3=Color3.fromRGB(220,220,225);lbl.TextXAlignment=Enum.TextXAlignment.Left;lbl.Parent=f
- local function render() lbl.Text=name.."  :  "..tostring(value) end
- render()
- local function btn(text,x,delta)
-  local b=Instance.new("TextButton")
-  b.Size=UDim2.new(0,34,0,24);b.Position=UDim2.new(1,x,0.5,-12)
-  b.BackgroundColor3=Color3.fromRGB(0,0,0);b.Text=text;b.Font=Enum.Font.GothamBold
-  b.TextSize=16;b.TextColor3=Color3.new(1,1,1);b.Parent=f
-  Instance.new("UICorner",b).CornerRadius=UDim.new(0,6)
-  b.MouseButton1Click:Connect(function()
-   value=math.clamp(value+delta,min,max);render();pcall(callback,value)
-  end)
- end
- btn("-",-80,-step);btn("+",-40,step)
-end
-local function addSection(page,title,startOpen)
- local open=startOpen and true or false
- local header=Instance.new("TextButton")
- header.Size=UDim2.new(1,-6,0,30);header.BackgroundColor3=Color3.fromRGB(18,18,24)
- header.BackgroundTransparency=0.1;header.Font=Enum.Font.GothamBold;header.TextSize=13
- header.TextColor3=Color3.fromRGB(220,220,225);header.LayoutOrder=nextOrder(page);header.Parent=page
- Instance.new("UICorner",header).CornerRadius=UDim.new(0,8)
- local hs=Instance.new("UIStroke",header)
- hs.Color=GREY
- local body=Instance.new("Frame")
- body.Size=UDim2.new(1,0,0,0);body.AutomaticSize=Enum.AutomaticSize.Y
- body.BackgroundTransparency=1;body.LayoutOrder=nextOrder(page)
- body.Visible=open;body.Parent=page
- local bodyLayout=Instance.new("UIListLayout",body)
- bodyLayout.SortOrder=Enum.SortOrder.LayoutOrder;bodyLayout.Padding=UDim.new(0,4)
- local function refresh()
-  header.Text=(open and "▼  " or "▶  ")..title;body.Visible=open
- end
- refresh()
- header.MouseButton1Click:Connect(function() open=not open;refresh() end)
- return body
+    orderCounter[page] = (orderCounter[page] or 0) + 1
+    return orderCounter[page]
 end
 
-local FarmTab=createTab("Farm")
-addToggle(FarmTab,"Instant Herb",CONFIG.FARM,setFarm)
-addToggle(FarmTab,"Auto Farm (Tween)",CONFIG.TWEEN_FARM,setTweenFarm)
-addStepper(FarmTab,"Move Speed",10,500,10,CONFIG.TWEEN_SPEED,function(v) CONFIG.TWEEN_SPEED=v end)
-local TierBox=addSection(FarmTab,"Select Tier",false)
-addToggle(TierBox,"Tier 1000",CONFIG.TIER_ON[1000],function(v) CONFIG.TIER_ON[1000]=v end)
-addToggle(TierBox,"Tier 100",CONFIG.TIER_ON[100],function(v) CONFIG.TIER_ON[100]=v end)
-addToggle(TierBox,"Tier 10",CONFIG.TIER_ON[10],function(v) CONFIG.TIER_ON[10]=v end)
-addToggle(TierBox,"Tier 1",CONFIG.TIER_ON[1],function(v) CONFIG.TIER_ON[1]=v end)
-addStepper(FarmTab,"Search Delay (ms)",0,1000,50,CONFIG.SCAN_DELAY,function(v) CONFIG.SCAN_DELAY=v end)
-addToggle(FarmTab,"Reduce Lag",CONFIG.PURGE,function(v) CONFIG.PURGE=v end)
-addStepper(FarmTab,"Herb Button Up (px)",0,300,20,CONFIG.PROMPT_UP,function(v) CONFIG.PROMPT_UP=v;refreshPromptUi() end)
+local function addToggle(page, name, default, callback)
+    local state = default
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(55, 55, 64)
+    b.BackgroundTransparency = 0.1
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.fromRGB(220, 220, 225)
+    b.LayoutOrder = nextOrder(page)
+    b.Parent = page
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", b)
+    b.Text = ""
 
-local EspTab=createTab("ESP")
-addToggle(EspTab,"ESP Herb",CONFIG.ESP_HERB,setEspHerb)
-addToggle(EspTab,"ESP Player",CONFIG.ESP_PLAYERS,setEspPlayers)
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(0, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    fill.BorderSizePixel = 0
+    fill.Parent = b
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 8)
 
-local CultTab=createTab("Cultivate")
-addToggle(CultTab,"Auto Breakthrough",CONFIG.BREAKTHROUGH,setBreakthrough)
-addStepper(CultTab,"Minigame Wait (s)",1,15,1,CONFIG.BT_DELAY,function(v) CONFIG.BT_DELAY=v end)
-addStepper(CultTab,"Retry Every (s)",1,60,1,CONFIG.BT_INTERVAL,function(v) CONFIG.BT_INTERVAL=v end)
+    local shine = Instance.new("UIGradient", fill)
+    shine.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(95, 95, 105)),
+        ColorSequenceKeypoint.new(0.3, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(0.7, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(95, 95, 105)),
+    })
+    local shimmer = nil
 
-local MiscTab=createTab("Misc")
-addToggle(MiscTab,"Anti AFK",CONFIG.ANTI_AFK,function(v) CONFIG.ANTI_AFK=v end)
+    local txt = Instance.new("TextLabel")
+    txt.Size = UDim2.new(1, 0, 1, 0)
+    txt.BackgroundTransparency = 1
+    txt.Font = Enum.Font.GothamBold
+    txt.TextSize = 13
+    txt.TextColor3 = Color3.new(1, 1, 1)
+    txt.Parent = b
 
-local KillAuraTab=createTab("KillAura")
-addToggle(KillAuraTab,"Kill Aura",CONFIG.KA_ENABLED,function(v) setKillAura(v) end)
+    local function refresh(animate)
+        txt.Text = name .. "  :  " .. (state and "ON" or "OFF")
+        local goalSize = UDim2.new(state and 1 or 0, 0, 1, 0)
+        local goalColor = state and Color3.fromRGB(0, 0, 0) or GREY
+        if animate then
+            TS:Create(fill, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = goalSize}):Play()
+            TS:Create(s, TweenInfo.new(0.35), {Color = goalColor, Thickness = state and 2.5 or 1}):Play()
+        else
+            fill.Size = goalSize
+            s.Color = goalColor
+            s.Thickness = state and 2.5 or 1
+        end
+        if state then
+            if not shimmer then
+                shine.Offset = Vector2.new(-1, 0)
+                shimmer = TS:Create(shine, TweenInfo.new(1.4, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1), {Offset = Vector2.new(1, 0)})
+                shimmer:Play()
+            end
+        elseif shimmer then
+            shimmer:Cancel()
+            shimmer = nil
+        end
+    end
+    refresh(false)
+
+    b.MouseButton1Click:Connect(function()
+        state = not state
+        refresh(true)
+        pcall(callback, state)
+    end)
+end
+
+local function addStepper(page, name, min, max, step, default, callback)
+    local value = default
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, -6, 0, 34)
+    f.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    f.BackgroundTransparency = 0.25
+    f.LayoutOrder = nextOrder(page)
+    f.Parent = page
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+    local fs = Instance.new("UIStroke", f)
+    fs.Color = GREY
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -90, 1, 0)
+    lbl.Position = UDim2.new(0, 10, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 13
+    lbl.TextColor3 = Color3.fromRGB(220, 220, 225)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = f
+
+    local function render() lbl.Text = name .. "  :  " .. tostring(value) end
+    render()
+
+    local function btn(text, x, delta)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(0, 34, 0, 24)
+        b.Position = UDim2.new(1, x, 0.5, -12)
+        b.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        b.Text = text
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 16
+        b.TextColor3 = Color3.new(1, 1, 1)
+        b.Parent = f
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        b.MouseButton1Click:Connect(function()
+            value = math.clamp(value + delta, min, max)
+            render()
+            pcall(callback, value)
+        end)
+    end
+    btn("-", -80, -step)
+    btn("+", -40, step)
+end
+
+local function addSection(page, title, startOpen)
+    local open = startOpen and true or false
+    local header = Instance.new("TextButton")
+    header.Size = UDim2.new(1, -6, 0, 30)
+    header.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    header.BackgroundTransparency = 0.1
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 13
+    header.TextColor3 = Color3.fromRGB(220, 220, 225)
+    header.LayoutOrder = nextOrder(page)
+    header.Parent = page
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 8)
+    local hs = Instance.new("UIStroke", header)
+    hs.Color = GREY
+
+    local body = Instance.new("Frame")
+    body.Size = UDim2.new(1, 0, 0, 0)
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.BackgroundTransparency = 1
+    body.LayoutOrder = nextOrder(page)
+    body.Visible = open
+    body.Parent = page
+    local bodyLayout = Instance.new("UIListLayout", body)
+    bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    bodyLayout.Padding = UDim.new(0, 4)
+
+    local function refresh()
+        header.Text = (open and "▼  " or "▶  ") .. title
+        body.Visible = open
+    end
+    refresh()
+    header.MouseButton1Click:Connect(function()
+        open = not open
+        refresh()
+    end)
+
+    return body
+end
+
+-- Tab Farm
+local FarmTab = createTab("Farm")
+local TierBox = addSection(FarmTab, "Select Tier", false)
+addToggle(TierBox, "Tier 1000", CONFIG.TIER_ON[1000], function(v) CONFIG.TIER_ON[1000] = v end)
+addToggle(TierBox, "Tier 100", CONFIG.TIER_ON[100], function(v) CONFIG.TIER_ON[100] = v end)
+addToggle(TierBox, "Tier 10", CONFIG.TIER_ON[10], function(v) CONFIG.TIER_ON[10] = v end)
+addToggle(TierBox, "Tier 1", CONFIG.TIER_ON[1], function(v) CONFIG.TIER_ON[1] = v end)
+addStepper(FarmTab, "Move Speed", 10, 500, 10, CONFIG.TWEEN_SPEED, function(v) CONFIG.TWEEN_SPEED = v end)
+addStepper(FarmTab, "Search Delay (ms)", 0, 1000, 50, CONFIG.SCAN_DELAY, function(v) CONFIG.SCAN_DELAY = v end)
+addStepper(FarmTab, "Herb Button Up (px)", 0, 300, 20, CONFIG.PROMPT_UP, function(v)
+    CONFIG.PROMPT_UP = v
+    refreshPromptUi()
+end)
+addToggle(FarmTab, "Auto Farm (Tween)", CONFIG.TWEEN_FARM, setTweenFarm)
+addToggle(FarmTab, "Instant Herb", CONFIG.FARM, setFarm)
+
+-- Tab ESP
+local EspTab = createTab("ESP")
+addToggle(EspTab, "ESP Herb", CONFIG.ESP_HERB, setEspHerb)
+addToggle(EspTab, "ESP Player", CONFIG.ESP_PLAYERS, setEspPlayers)
+
+-- Tab Cultivate
+local CultTab = createTab("Cultivate")
+addToggle(CultTab, "Auto Breakthrough", CONFIG.BREAKTHROUGH, setBreakthrough)
+addStepper(CultTab, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
+addStepper(CultTab, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
+
+-- Tab Misc
+local MiscTab = createTab("Misc")
+addToggle(MiscTab, "Anti AFK", CONFIG.ANTI_AFK, function(v) CONFIG.ANTI_AFK = v end)
+addToggle(MiscTab, "Booster FPS", CONFIG.PURGE, function(v) CONFIG.PURGE = v end)
+
+-- Tab KillAura
+local KillAuraTab = createTab("KillAura")
+addToggle(KillAuraTab, "Kill Aura", CONFIG.KA_ENABLED, function(v) setKillAura(v) end)
 
 selectTab("Farm")
 
-local icon=Instance.new("TextButton")
-icon.Size=UDim2.new(0,50,0,50);icon.Position=UDim2.new(0,15,0.4,0)
-icon.Text="";icon.Visible=false;icon.Parent=gui;makeLogo(icon)
-minBtn.MouseButton1Click:Connect(function() main.Visible=false;icon.Visible=true end)
-icon.MouseButton1Click:Connect(function() main.Visible=true;icon.Visible=false end)
+local icon = Instance.new("TextButton")
+icon.Size = UDim2.new(0, 50, 0, 50)
+icon.Position = UDim2.new(0, 15, 0.4, 0)
+icon.Text = ""
+icon.Visible = false
+icon.Parent = gui
+makeLogo(icon)
 
-local confirm=Instance.new("Frame")
-confirm.Size=UDim2.new(1,0,1,0);confirm.BackgroundColor3=Color3.new(0,0,0)
-confirm.BackgroundTransparency=0.35;confirm.BorderSizePixel=0;confirm.Active=true
-confirm.Visible=false;confirm.ZIndex=20;confirm.Parent=main
-local box=Instance.new("Frame")
-box.AnchorPoint=Vector2.new(0.5,0.5);box.Position=UDim2.new(0.5,0,0.5,0)
-box.Size=UDim2.new(0,260,0,130);box.BackgroundColor3=DARK;box.ZIndex=21;box.Parent=confirm
-Instance.new("UICorner",box).CornerRadius=UDim.new(0,10)
-local bs=Instance.new("UIStroke",box)
-bs.Color=GREY;bs.Thickness=1.5
-local ct=Instance.new("TextLabel")
-ct.Size=UDim2.new(1,-20,0,24);ct.Position=UDim2.new(0,10,0,12)
-ct.BackgroundTransparency=1;ct.Text="Delete script?";ct.Font=Enum.Font.GothamBlack
-ct.TextSize=16;ct.TextColor3=Color3.fromRGB(235,235,240);ct.ZIndex=22;ct.Parent=box
-local cs=Instance.new("TextLabel")
-cs.Size=UDim2.new(1,-20,0,34);cs.Position=UDim2.new(0,10,0,38)
-cs.BackgroundTransparency=1;cs.Text="The script will be closed and all features turned off."
-cs.Font=Enum.Font.Gotham;cs.TextSize=12;cs.TextWrapped=true
-cs.TextColor3=Color3.fromRGB(190,190,200);cs.ZIndex=22;cs.Parent=box
-local function confirmBtn(text,x,color)
- local b=Instance.new("TextButton")
- b.Size=UDim2.new(0.5,-15,0,32);b.Position=UDim2.new(x,x==0 and 10 or 5,1,-42)
- b.BackgroundColor3=color;b.Text=text;b.Font=Enum.Font.GothamBold
- b.TextSize=13;b.TextColor3=Color3.new(1,1,1);b.ZIndex=22;b.Parent=box
- Instance.new("UICorner",b).CornerRadius=UDim.new(0,8)
- return b
+minBtn.MouseButton1Click:Connect(function() main.Visible = false icon.Visible = true end)
+icon.MouseButton1Click:Connect(function() main.Visible = true icon.Visible = false end)
+
+local confirm = Instance.new("Frame")
+confirm.Size = UDim2.new(1, 0, 1, 0)
+confirm.BackgroundColor3 = Color3.new(0, 0, 0)
+confirm.BackgroundTransparency = 0.35
+confirm.BorderSizePixel = 0
+confirm.Active = true
+confirm.Visible = false
+confirm.ZIndex = 20
+confirm.Parent = main
+
+local box = Instance.new("Frame")
+box.AnchorPoint = Vector2.new(0.5, 0.5)
+box.Position = UDim2.new(0.5, 0, 0.5, 0)
+box.Size = UDim2.new(0, 260, 0, 130)
+box.BackgroundColor3 = DARK
+box.ZIndex = 21
+box.Parent = confirm
+Instance.new("UICorner", box).CornerRadius = UDim.new(0, 10)
+local bs = Instance.new("UIStroke", box)
+bs.Color = GREY
+bs.Thickness = 1.5
+
+local ct = Instance.new("TextLabel")
+ct.Size = UDim2.new(1, -20, 0, 24)
+ct.Position = UDim2.new(0, 10, 0, 12)
+ct.BackgroundTransparency = 1
+ct.Text = "Delete script?"
+ct.Font = Enum.Font.GothamBlack
+ct.TextSize = 16
+ct.TextColor3 = Color3.fromRGB(235, 235, 240)
+ct.ZIndex = 22
+ct.Parent = box
+
+local cs = Instance.new("TextLabel")
+cs.Size = UDim2.new(1, -20, 0, 34)
+cs.Position = UDim2.new(0, 10, 0, 38)
+cs.BackgroundTransparency = 1
+cs.Text = "The script will be closed and all features turned off."
+cs.Font = Enum.Font.Gotham
+cs.TextSize = 12
+cs.TextWrapped = true
+cs.TextColor3 = Color3.fromRGB(190, 190, 200)
+cs.ZIndex = 22
+cs.Parent = box
+
+local function confirmBtn(text, x, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.5, -15, 0, 32)
+    b.Position = UDim2.new(x, x == 0 and 10 or 5, 1, -42)
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.ZIndex = 22
+    b.Parent = box
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    return b
 end
-local cancelBtn=confirmBtn("Cancel",0,Color3.fromRGB(35,35,42))
-local yesBtn=confirmBtn("Yes, Delete",0.5,RED)
-closeBtn.MouseButton1Click:Connect(function() confirm.Visible=true end)
-cancelBtn.MouseButton1Click:Connect(function() confirm.Visible=false end)
+local cancelBtn = confirmBtn("Cancel", 0, Color3.fromRGB(35, 35, 42))
+local yesBtn = confirmBtn("Yes, Delete", 0.5, RED)
+
+closeBtn.MouseButton1Click:Connect(function() confirm.Visible = true end)
+cancelBtn.MouseButton1Click:Connect(function() confirm.Visible = false end)
 yesBtn.MouseButton1Click:Connect(function()
- CONFIG.ENABLED=false;CONFIG.FARM=false;CONFIG.TWEEN_FARM=false;CONFIG.KA_ENABLED=false
- farmId=farmId+1;tweenId=tweenId+1;kaId=kaId+1
- setEspPlayers(false);setEspHerb(false)
- gui:Destroy()
+    CONFIG.ENABLED = false
+    CONFIG.FARM = false
+    CONFIG.TWEEN_FARM = false
+    CONFIG.KA_ENABLED = false
+    local sf = getSwordFlight()
+    if sf then pcall(function() sf:FireServer(false) end) end
+    farmId = farmId + 1
+    tweenId = tweenId + 1
+    kaId = kaId + 1
+    setEspPlayers(false)
+    setEspHerb(false)
+    gui:Destroy()
 end)
 
-local function makeDraggable(handle,obj)
- local dragging,start,startPos
- handle.InputBegan:Connect(function(i)
-  if i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseButton1 then
-   dragging=true;start=i.Position;startPos=obj.Position
-   i.Changed:Connect(function() if i.UserInputState==Enum.UserInputState.End then dragging=false end end)
-  end
- end)
- UIS.InputChanged:Connect(function(i)
-  if dragging and (i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseMovement) then
-   local d=i.Position-start
-   obj.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
-  end
- end)
+local function makeDraggable(handle, obj)
+    local dragging, start, startPos
+    handle.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            start = i.Position
+            startPos = obj.Position
+            i.Changed:Connect(function()
+                if i.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+            local d = i.Position - start
+            obj.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
 end
-makeDraggable(header,main)
-makeDraggable(icon,icon)
+makeDraggable(header, main)
+makeDraggable(icon, icon)
 
 print("[SkyZenHub] Loaded")
-local remaining=math.max(0,LOAD_TIME-(os.clock()-loadStart)-0.6)
-local stages={{0.68,"Loading modules..."},{0.84,"Preparing features..."},{0.96,"Almost ready..."}}
-for _,st in ipairs(stages) do
- local d=remaining/#stages
- setProgress(st[1],st[2],d)
- task.wait(d)
+
+local remaining = math.max(0, LOAD_TIME - (os.clock() - loadStart) - 0.6)
+local stages = {
+    {0.68, "Loading modules..."},
+    {0.84, "Preparing features..."},
+    {0.96, "Almost ready..."},
+}
+for _, st in ipairs(stages) do
+    local d = remaining / #stages
+    setProgress(st[1], st[2], d)
+    task.wait(d)
 end
-setProgress(1,"Ready",0.4)
+setProgress(1, "Ready", 0.4)
 task.wait(0.6)
-local mainScale=Instance.new("UIScale",main)
-mainScale.Scale=0.85;main.Visible=true
-TS:Create(mainScale,TweenInfo.new(0.45,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Scale=1}):Play()
-TS:Create(loader,TweenInfo.new(0.35),{GroupTransparency=1}):Play()
+
+local mainScale = Instance.new("UIScale", main)
+mainScale.Scale = 0.85
+main.Visible = true
+TS:Create(mainScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+TS:Create(loader, TweenInfo.new(0.35), {GroupTransparency = 1}):Play()
 task.wait(0.4)
 loader:Destroy()
-READY=true
+
+READY = true
 setupPromptUi()
