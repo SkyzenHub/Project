@@ -1,91 +1,132 @@
--- SCRIPT UPDATE banner
-local function showUpdateBanner()
-    local banner = Instance.new("Frame")
-    banner.Name = "UpdateBanner"
-    banner.Size = UDim2.new(0, 340, 0, 0)
-    banner.Position = UDim2.new(0.5, -170, 0, 80)
-    banner.BackgroundColor3 = Color3.fromRGB(20, 25, 30)
-    banner.BorderSizePixel = 0
-    banner.ClipsDescendants = true
-    banner.ZIndex = 60
-    banner.Parent = gui
-    Instance.new("UICorner", banner).CornerRadius = UDim.new(0, 10)
+-- OVERLAY UPDATE
+local function showUpdateOverlay()
+    local overlay = Instance.new("Frame")
+    overlay.Name = "UpdateOverlay"
+    overlay.Size = UDim2.new(1, 0, 1, 0)
+    overlay.Position = UDim2.new(0, 0, 0, 0)
+    overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+    overlay.BackgroundTransparency = 0.35
+    overlay.BorderSizePixel = 0
+    overlay.ZIndex = 100
+    overlay.Parent = gui
 
-    local bStroke = Instance.new("UIStroke", banner)
-    bStroke.Color = Color3.fromRGB(70, 200, 255)
-    bStroke.Thickness = 1.5
-    bStroke.Transparency = 0.2
+    local panel = Instance.new("Frame")
+    panel.Name = "Panel"
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+    panel.Size = UDim2.new(0, 320, 0, 260)
+    panel.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+    panel.BorderSizePixel = 0
+    panel.ZIndex = 101
+    panel.Parent = overlay
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
 
-    local bGrad = Instance.new("UIGradient", banner)
-    bGrad.Rotation = 90
-    bGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 40, 55)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 14, 20)),
+    local stroke = Instance.new("UIStroke", panel)
+    stroke.Color = Color3.fromRGB(255, 200, 0)
+    stroke.Thickness = 3
+    stroke.Transparency = 0
+
+    -- hazard strip atas
+    local topStrip = Instance.new("Frame")
+    topStrip.Size = UDim2.new(1, 0, 0, 10)
+    topStrip.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
+    topStrip.BorderSizePixel = 0
+    topStrip.ZIndex = 102
+    topStrip.Parent = panel
+    Instance.new("UICorner", topStrip).CornerRadius = UDim.new(0, 14)
+
+    -- garis hitam hazard
+    local hazard = Instance.new("Frame")
+    hazard.Size = UDim2.new(1, 0, 0, 10)
+    hazard.BackgroundColor3 = Color3.new(0, 0, 0)
+    hazard.BorderSizePixel = 0
+    hazard.ZIndex = 103
+    hazard.Parent = panel
+    local hGrad = Instance.new("UIGradient", hazard)
+    hGrad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.1, 0),
+        NumberSequenceKeypoint.new(0.2, 1),
+        NumberSequenceKeypoint.new(0.3, 0),
+        NumberSequenceKeypoint.new(0.4, 1),
+        NumberSequenceKeypoint.new(0.5, 0),
+        NumberSequenceKeypoint.new(0.6, 1),
+        NumberSequenceKeypoint.new(0.7, 0),
+        NumberSequenceKeypoint.new(0.8, 1),
+        NumberSequenceKeypoint.new(0.9, 0),
+        NumberSequenceKeypoint.new(1, 1),
     })
 
-    local iconFrame = Instance.new("Frame")
-    iconFrame.Size = UDim2.new(0, 36, 0, 36)
-    iconFrame.Position = UDim2.new(0, 12, 0, 14)
-    iconFrame.BackgroundColor3 = Color3.fromRGB(30, 60, 80)
-    iconFrame.BorderSizePixel = 0
-    iconFrame.ZIndex = 61
-    iconFrame.Parent = banner
-    Instance.new("UICorner", iconFrame).CornerRadius = UDim.new(0, 8)
-
-    local iconTxt = Instance.new("TextLabel")
-    iconTxt.Size = UDim2.new(1, 0, 1, 0)
-    iconTxt.BackgroundTransparency = 1
-    iconTxt.Text = "↑"
-    iconTxt.Font = Enum.Font.GothamBlack
-    iconTxt.TextSize = 22
-    iconTxt.TextColor3 = Color3.fromRGB(120, 220, 255)
-    iconTxt.ZIndex = 62
-    iconTxt.Parent = iconFrame
-
     local titleLbl = Instance.new("TextLabel")
-    titleLbl.Size = UDim2.new(1, -110, 0, 18)
-    titleLbl.Position = UDim2.new(0, 58, 0, 12)
+    titleLbl.Size = UDim2.new(1, -30, 0, 40)
+    titleLbl.Position = UDim2.new(0, 15, 0, 35)
     titleLbl.BackgroundTransparency = 1
-    titleLbl.Text = "SCRIPT UPDATE"
+    titleLbl.Text = "UPDATE TO SCRIPT"
     titleLbl.Font = Enum.Font.GothamBlack
-    titleLbl.TextSize = 13
-    titleLbl.TextColor3 = Color3.fromRGB(120, 220, 255)
-    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
-    titleLbl.ZIndex = 61
-    titleLbl.Parent = banner
+    titleLbl.TextSize = 24
+    titleLbl.TextColor3 = Color3.fromRGB(255, 220, 60)
+    titleLbl.TextScaled = false
+    titleLbl.ZIndex = 102
+    titleLbl.Parent = panel
 
-    local verLbl = Instance.new("TextLabel")
-    verLbl.Size = UDim2.new(1, -110, 0, 16)
-    verLbl.Position = UDim2.new(0, 58, 0, 30)
-    verLbl.BackgroundTransparency = 1
-    verLbl.Text = SCRIPT_VERSION .. "  ·  " .. SCRIPT_UPDATED
-    verLbl.Font = Enum.Font.Gotham
-    verLbl.TextSize = 11
-    verLbl.TextColor3 = Color3.fromRGB(180, 200, 220)
-    verLbl.TextXAlignment = Enum.TextXAlignment.Left
-    verLbl.ZIndex = 61
-    verLbl.Parent = banner
+    local skullLbl = Instance.new("TextLabel")
+    skullLbl.Size = UDim2.new(1, -30, 0, 50)
+    skullLbl.Position = UDim2.new(0, 15, 0, 80)
+    skullLbl.BackgroundTransparency = 1
+    skullLbl.Text = "☣️☣️☣️☣️☣️☣️☣️"
+    skullLbl.Font = Enum.Font.GothamBlack
+    skullLbl.TextSize = 30
+    skullLbl.TextColor3 = Color3.fromRGB(255, 80, 80)
+    skullLbl.ZIndex = 102
+    skullLbl.Parent = panel
+
+    local descLbl = Instance.new("TextLabel")
+    descLbl.Size = UDim2.new(1, -30, 0, 30)
+    descLbl.Position = UDim2.new(0, 15, 0, 138)
+    descLbl.BackgroundTransparency = 1
+    descLbl.Text = "Contact a moderator"
+    descLbl.Font = Enum.Font.GothamBold
+    descLbl.TextSize = 16
+    descLbl.TextColor3 = Color3.fromRGB(230, 230, 240)
+    descLbl.ZIndex = 102
+    descLbl.Parent = panel
 
     local okBtn = Instance.new("TextButton")
-    okBtn.Size = UDim2.new(0, 60, 0, 26)
-    okBtn.Position = UDim2.new(1, -72, 0, 19)
-    okBtn.BackgroundColor3 = Color3.fromRGB(40, 90, 120)
+    okBtn.AnchorPoint = Vector2.new(0.5, 0)
+    okBtn.Position = UDim2.new(0.5, 0, 1, -70)
+    okBtn.Size = UDim2.new(0, 200, 0, 44)
+    okBtn.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
     okBtn.BorderSizePixel = 0
-    okBtn.Text = "OK"
-    okBtn.Font = Enum.Font.GothamBold
-    okBtn.TextSize = 12
-    okBtn.TextColor3 = Color3.new(1, 1, 1)
-    okBtn.ZIndex = 61
-    okBtn.Parent = banner
-    Instance.new("UICorner", okBtn).CornerRadius = UDim.new(0, 6)
+    okBtn.Text = "MENGERTI"
+    okBtn.Font = Enum.Font.GothamBlack
+    okBtn.TextSize = 16
+    okBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
+    okBtn.ZIndex = 102
+    okBtn.Parent = panel
+    Instance.new("UICorner", okBtn).CornerRadius = UDim.new(0, 8)
+
+    -- hazard strip bawah
+    local bottomStrip = Instance.new("Frame")
+    bottomStrip.Size = UDim2.new(1, 0, 0, 10)
+    bottomStrip.Position = UDim2.new(0, 0, 1, -10)
+    bottomStrip.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
+    bottomStrip.BorderSizePixel = 0
+    bottomStrip.ZIndex = 102
+    bottomStrip.Parent = panel
+    Instance.new("UICorner", bottomStrip).CornerRadius = UDim.new(0, 14)
+
+    local panelScale = Instance.new("UIScale", panel)
+    panelScale.Scale = 0.7
+    TS:Create(panelScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
 
     okBtn.MouseButton1Click:Connect(function()
-        local t = TS:Create(banner, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = UDim2.new(0, 340, 0, 0)})
+        local t = TS:Create(overlay, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {BackgroundTransparency = 1})
         t:Play()
-        t.Completed:Connect(function() banner:Destroy() end)
+        local t2 = TS:Create(panelScale, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale = 0.7})
+        t2:Play()
+        task.wait(0.35)
+        overlay:Destroy()
     end)
-
-    TS:Create(banner, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 340, 0, 62)}):Play()
 end
 
-task.spawn(showUpdateBanner)
+task.spawn(showUpdateOverlay)
