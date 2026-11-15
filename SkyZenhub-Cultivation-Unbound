@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS (edit here)
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb"
+local TITLE = "SKYZENHUB - Herb v13"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -20,11 +20,12 @@ local LOAD_TIME = 10
 local CONFIG = {
     ENABLED = true,
     FARM = false,
+    TWEEN_FARM = false,  -- fly to each herb with Tween and collect it
     TWEEN_SPEED = 150,   -- 10 - 500
     SCAN_DELAY = 100,    -- ms, 0 - 1000
     PURGE = false,
+    TIER_ON = { [1000] = true, [100] = true, [10] = true, [1] = true }, -- which herb tiers to farm
     PROMPT_UP = 100,     -- px, moves the on-screen herb button up (0 - 300)
-    USE_E_KEY = true,    -- fast virtual E key (can hide the phone controls)
     ANTI_AFK = true,
     ESP_HERB = false,
     ESP_PLAYERS = false,
@@ -35,48 +36,19 @@ local CONFIG = {
 
 local TIERS = { 1000, 100, 10, 1 }
 
-------------------------------------------------------------
--- AUTO SAVE
-------------------------------------------------------------
-local SAVE_FILE = "SkyZenHub_Herb.json"
-local SAVE_KEYS = {
-    "FARM", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "PURGE", "ANTI_AFK",
-    "TWEEN_SPEED", "SCAN_DELAY", "BT_INTERVAL", "BT_DELAY", "USE_E_KEY", "PROMPT_UP",
-}
-local ConfigLocked = false
-local READY = false -- becomes true only after the loading screen has finished
-
-local function LoadConfig()
-    if not (isfile and readfile) then return end
-    local ok, data = pcall(function()
-        if not isfile(SAVE_FILE) then return nil end
-        return HttpService:JSONDecode(readfile(SAVE_FILE))
-    end)
-    if ok and type(data) == "table" then
-        for _, key in ipairs(SAVE_KEYS) do
-            if type(data[key]) == type(CONFIG[key]) then CONFIG[key] = data[key] end
-        end
+-- only the tiers that are switched ON in the Farm tab (priority stays 1000 > 100 > 10 > 1)
+local function activeTiers()
+    local list = {}
+    for _, tier in ipairs(TIERS) do
+        if CONFIG.TIER_ON[tier] then list[#list + 1] = tier end
     end
+    return list
 end
 
-local function SaveNow()
-    if not writefile or ConfigLocked then return end
-    local data = {}
-    for _, key in ipairs(SAVE_KEYS) do data[key] = CONFIG[key] end
-    pcall(function() writefile(SAVE_FILE, HttpService:JSONEncode(data)) end)
-end
-
-local savePending = false
-local function SaveConfig()
-    if savePending then return end
-    savePending = true
-    task.delay(0.5, function()
-        savePending = false
-        SaveNow()
-    end)
-end
-
-LoadConfig()
+------------------------------------------------------------
+-- STARTUP (no auto save: every run starts with the default settings)
+------------------------------------------------------------
+local READY = false -- becomes true only after the loading screen has finished
 
 ------------------------------------------------------------
 -- HERB LOGIC
@@ -115,6 +87,7 @@ local function setupPromptUi()
     task.spawn(function()
         local spots = workspace:WaitForChild("HerbSpots", 15)
         if not spots then return end
+        hookSpots(spots) -- instant herbs (HoldDuration 0) as soon as the script is on
         for _, d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
         spots.DescendantAdded:Connect(applyPromptUi)
     end)
@@ -137,6 +110,65 @@ local function getPos(obj)
     if obj:IsA("BasePart") then return obj.Position end
 end
 
+-- Original collect mechanism, without any teleport/tween:
+-- every herb prompt is instant (HoldDuration 0) and herbs inside your reach are collected by tier priority.
+local function findNearTarget(spots, hrp)
+    for _, tier in ipairs(activeTiers()) do
+        for _, spot in ipairs(spots:GetChildren()) do
+            if spot.Parent and spot:GetAttribute("HerbYear") == tier then
+                local prompt = spot:FindFirstChild("CollectHerbPrompt", true)
+                local pos = getPos(spot)
+                if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos
+                    and (pos - hrp.Position).Magnitude <= prompt.MaxActivationDistance + 2 then
+                    return spot, prompt, tier
+                end
+            end
+        end
+    end
+end
+
+local function farmLoop(id)
+    local purged = false
+    while CONFIG.ENABLED and CONFIG.FARM and farmId == id do
+        local spots = workspace:FindFirstChild("HerbSpots")
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+        if not (spots and hrp) then
+            task.wait(1)
+        else
+            hookSpots(spots)
+            if CONFIG.PURGE and not purged then
+                purged = true
+                purgeMap(spots)
+            end
+
+            local spot, prompt = findNearTarget(spots, hrp)
+            if spot then
+                pcall(function() fireproximityprompt(prompt) end)
+                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                task.wait(0.02)
+                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                task.wait(0.1)
+            else
+                task.wait(CONFIG.SCAN_DELAY / 1000)
+            end
+        end
+    end
+end
+
+local function setFarm(v)
+    CONFIG.FARM = v
+    farmId = farmId + 1
+    if v then
+        task.spawn(farmLoop, farmId)
+    end
+end
+
+-- Tween farm: smoothly flies to each herb (Move Speed) and collects it
+local tweenId = 0
+local skipUntil = {}
+
 local function moveTo(hrp, pos, id)
     local cf = CFrame.new(pos + Vector3.new(0, 3, 0))
     local dist = (hrp.Position - cf.Position).Magnitude
@@ -151,7 +183,7 @@ local function moveTo(hrp, pos, id)
     local conn = tw.Completed:Connect(function() done = true end)
     tw:Play()
 
-    while not done and CONFIG.FARM and farmId == id do
+    while not done and CONFIG.TWEEN_FARM and tweenId == id do
         task.wait(0.01)
     end
     conn:Disconnect()
@@ -164,10 +196,8 @@ local function moveTo(hrp, pos, id)
     return true
 end
 
-local skipUntil = {}
-
-local function findTarget(spots)
-    for _, tier in ipairs(TIERS) do
+local function findTweenTarget(spots)
+    for _, tier in ipairs(activeTiers()) do
         for _, spot in ipairs(spots:GetChildren()) do
             if spot.Parent and spot:GetAttribute("HerbYear") == tier
                 and not (skipUntil[spot] and skipUntil[spot] > os.clock()) then
@@ -181,55 +211,49 @@ local function findTarget(spots)
     end
 end
 
-local function farmLoop(id)
+local function tweenLoop(id)
     local purged = false
-    while CONFIG.ENABLED and CONFIG.FARM and farmId == id do
+    while CONFIG.ENABLED and CONFIG.TWEEN_FARM and tweenId == id do
         local spots = workspace:FindFirstChild("HerbSpots")
         if not spots then
             task.wait(1)
         else
-            hookSpots(spots)
+            hookSpots(spots) -- instant herbs (HoldDuration 0)
             if CONFIG.PURGE and not purged then
                 purged = true
                 purgeMap(spots)
             end
 
-            local spot, prompt, pos, tier = findTarget(spots)
+            local spot, prompt, pos = findTweenTarget(spots)
             if spot then
                 local char = LocalPlayer.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then
-                    if moveTo(hrp, pos, id) and CONFIG.FARM and farmId == id then
-                        task.wait(CONFIG.USE_E_KEY and 0.05 or 0.2) -- let the server catch up with the new position
+                    if moveTo(hrp, pos, id) and CONFIG.TWEEN_FARM and tweenId == id then
+                        task.wait(0.2) -- let the server catch up with the new position
 
                         -- try up to 4 times until the herb is really gone
                         local collected = false
                         for _ = 1, 4 do
-                            if not (CONFIG.FARM and farmId == id) then break end
+                            if not (CONFIG.TWEEN_FARM and tweenId == id) then break end
                             if not (spot.Parent and prompt.Parent and prompt.Enabled) then
                                 collected = true
                                 break
                             end
                             pcall(function() fireproximityprompt(prompt) end)
-                            if CONFIG.USE_E_KEY then
-                                -- fast E press: one frame is enough because the prompt has no hold time
-                                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                                task.wait()
-                                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-                                task.wait(0.1)
-                            else
-                                -- simulate a hold on the prompt itself (no keyboard input, so the phone controls stay visible)
-                                pcall(function()
-                                    prompt:InputHoldBegin()
-                                    task.wait(0.05)
-                                    prompt:InputHoldEnd()
-                                end)
-                                task.wait(0.25)
-                            end
+                            VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                            task.wait(0.02)
+                            VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                            pcall(function()
+                                prompt:InputHoldBegin()
+                                task.wait(0.05)
+                                prompt:InputHoldEnd()
+                            end)
+                            task.wait(0.25)
                         end
 
                         -- still there after 4 tries: skip this herb for a few seconds
-                        if not collected and CONFIG.FARM and farmId == id
+                        if not collected and CONFIG.TWEEN_FARM and tweenId == id
                             and spot.Parent and prompt.Parent and prompt.Enabled then
                             skipUntil[spot] = os.clock() + 5
                         end
@@ -244,11 +268,11 @@ local function farmLoop(id)
     end
 end
 
-local function setFarm(v)
-    CONFIG.FARM = v
-    farmId = farmId + 1
+local function setTweenFarm(v)
+    CONFIG.TWEEN_FARM = v
+    tweenId = tweenId + 1
     if v then
-        task.spawn(farmLoop, farmId)
+        task.spawn(tweenLoop, tweenId)
     end
 end
 
@@ -346,10 +370,9 @@ local function setEspHerb(v)
     end)
 end
 
--- ESP Player (highlight + name + distance)
+-- ESP Player (highlight + name + distance), re-checked every 0.3 s so nobody is missed
 local espPlayers = {}
-local espPlayerChars = {}
-local espPlayerAdded, espPlayerRemoving, espPlayerLoop
+local espPlayerLoop = nil
 local PLAYER_ESP_COLOR = Color3.fromRGB(64, 224, 255)
 
 local function removePlayerEsp(plr)
@@ -361,13 +384,11 @@ local function removePlayerEsp(plr)
     end
 end
 
-local function addPlayerEsp(plr)
-    if plr == LocalPlayer then return end
-    removePlayerEsp(plr)
-    local char = plr.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
+local function getEspRoot(char)
+    return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChild("Head")
+end
 
+local function buildPlayerEsp(plr, char, root)
     local hl = Instance.new("Highlight")
     hl.Adornee = char
     hl.FillColor = PLAYER_ESP_COLOR
@@ -394,56 +415,62 @@ local function addPlayerEsp(plr)
     label.Text = plr.Name
     label.Parent = bb
 
-    espPlayers[plr] = { hl = hl, bb = bb, label = label }
+    local d = { hl = hl, bb = bb, label = label, char = char }
+    espPlayers[plr] = d
+    return d
 end
 
 local function setEspPlayers(v)
     CONFIG.ESP_PLAYERS = v
-
-    if espPlayerAdded then espPlayerAdded:Disconnect() espPlayerAdded = nil end
-    if espPlayerRemoving then espPlayerRemoving:Disconnect() espPlayerRemoving = nil end
-    if espPlayerLoop then espPlayerLoop:Disconnect() espPlayerLoop = nil end
-    for _, c in pairs(espPlayerChars) do c:Disconnect() end
-    espPlayerChars = {}
+    if espPlayerLoop then
+        espPlayerLoop:Disconnect()
+        espPlayerLoop = nil
+    end
     local list = {}
     for plr in pairs(espPlayers) do list[#list + 1] = plr end
     for _, plr in ipairs(list) do removePlayerEsp(plr) end
 
     if not v then return end
 
-    local function track(plr)
-        if plr == LocalPlayer then return end
-        espPlayerChars[plr] = plr.CharacterAdded:Connect(function()
-            task.wait(1)
-            if CONFIG.ESP_PLAYERS then addPlayerEsp(plr) end
-        end)
-        if plr.Character then addPlayerEsp(plr) end
-    end
-
-    for _, plr in ipairs(Players:GetPlayers()) do track(plr) end
-    espPlayerAdded = Players.PlayerAdded:Connect(track)
-    espPlayerRemoving = Players.PlayerRemoving:Connect(function(plr)
-        removePlayerEsp(plr)
-        if espPlayerChars[plr] then
-            espPlayerChars[plr]:Disconnect()
-            espPlayerChars[plr] = nil
-        end
-    end)
-
     local acc = 0
     espPlayerLoop = RunService.Heartbeat:Connect(function(dt)
         acc = acc + dt
-        if acc < 0.2 then return end
+        if acc < 0.3 then return end
         acc = 0
+
         local myChar = LocalPlayer.Character
         local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        for plr, d in pairs(espPlayers) do
-            local char = plr.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if root and myRoot and d.label.Parent then
-                d.label.Text = plr.Name .. " | " .. math.floor((root.Position - myRoot.Position).Magnitude) .. "m"
+        local present = {}
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then
+                present[plr] = true
+                local char = plr.Character
+                local root = char and getEspRoot(char)
+                local d = espPlayers[plr]
+                if root then
+                    -- build again when it is missing or the player has a new character
+                    if not d or d.char ~= char or not d.hl.Parent or not d.bb.Parent then
+                        removePlayerEsp(plr)
+                        d = buildPlayerEsp(plr, char, root)
+                    end
+                    if myRoot then
+                        d.label.Text = plr.Name .. " | " .. math.floor((root.Position - myRoot.Position).Magnitude) .. "m"
+                    else
+                        d.label.Text = plr.Name
+                    end
+                elseif d then
+                    removePlayerEsp(plr)
+                end
             end
         end
+
+        -- players who left the server
+        local gone = {}
+        for plr in pairs(espPlayers) do
+            if not present[plr] then gone[#gone + 1] = plr end
+        end
+        for _, plr in ipairs(gone) do removePlayerEsp(plr) end
     end)
 end
 
@@ -858,11 +885,19 @@ local function createTab(name)
     page.AutomaticCanvasSize = Enum.AutomaticSize.Y
     page.Visible = false
     page.Parent = main
-    Instance.new("UIListLayout", page).Padding = UDim.new(0, 4)
+    local pageLayout = Instance.new("UIListLayout", page)
+    pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    pageLayout.Padding = UDim.new(0, 4)
     pages[name] = page
 
     b.MouseButton1Click:Connect(function() selectTab(name) end)
     return page
+end
+
+local orderCounter = {}
+local function nextOrder(page)
+    orderCounter[page] = (orderCounter[page] or 0) + 1
+    return orderCounter[page]
 end
 
 local function addToggle(page, name, default, callback)
@@ -874,6 +909,7 @@ local function addToggle(page, name, default, callback)
     b.Font = Enum.Font.GothamBold
     b.TextSize = 13
     b.TextColor3 = Color3.fromRGB(220, 220, 225)
+    b.LayoutOrder = nextOrder(page)
     b.Parent = page
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
     local s = Instance.new("UIStroke", b)
@@ -932,7 +968,6 @@ local function addToggle(page, name, default, callback)
         state = not state
         refresh(true)
         pcall(callback, state)
-        SaveConfig()
     end)
 end
 
@@ -942,6 +977,7 @@ local function addStepper(page, name, min, max, step, default, callback)
     f.Size = UDim2.new(1, -6, 0, 34)
     f.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
     f.BackgroundTransparency = 0.25
+    f.LayoutOrder = nextOrder(page)
     f.Parent = page
     Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
     local fs = Instance.new("UIStroke", f)
@@ -975,20 +1011,65 @@ local function addStepper(page, name, min, max, step, default, callback)
             value = math.clamp(value + delta, min, max)
             render()
             pcall(callback, value)
-            SaveConfig()
         end)
     end
     btn("-", -80, -step)
     btn("+", -40, step)
 end
 
+-- Collapsible section: tap the title to open or close the options inside it
+local function addSection(page, title, startOpen)
+    local open = startOpen and true or false
+
+    local header = Instance.new("TextButton")
+    header.Size = UDim2.new(1, -6, 0, 30)
+    header.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    header.BackgroundTransparency = 0.1
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 13
+    header.TextColor3 = Color3.fromRGB(220, 220, 225)
+    header.LayoutOrder = nextOrder(page)
+    header.Parent = page
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 8)
+    local hs = Instance.new("UIStroke", header)
+    hs.Color = GREY
+
+    local body = Instance.new("Frame")
+    body.Size = UDim2.new(1, 0, 0, 0)
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.BackgroundTransparency = 1
+    body.LayoutOrder = nextOrder(page)
+    body.Visible = open
+    body.Parent = page
+    local bodyLayout = Instance.new("UIListLayout", body)
+    bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    bodyLayout.Padding = UDim.new(0, 4)
+
+    local function refresh()
+        header.Text = (open and "▼  " or "▶  ") .. title
+        body.Visible = open
+    end
+    refresh()
+    header.MouseButton1Click:Connect(function()
+        open = not open
+        refresh()
+    end)
+
+    return body
+end
+
 -- Tab Farm
 local FarmTab = createTab("Farm")
-addToggle(FarmTab, "Auto Herb", CONFIG.FARM, setFarm)
+addToggle(FarmTab, "Instant Herb", CONFIG.FARM, setFarm)
+addToggle(FarmTab, "Auto Farm (Tween)", CONFIG.TWEEN_FARM, setTweenFarm)
 addStepper(FarmTab, "Move Speed", 10, 500, 10, CONFIG.TWEEN_SPEED, function(v) CONFIG.TWEEN_SPEED = v end)
+local TierBox = addSection(FarmTab, "Select Tier", false)
+addToggle(TierBox, "Tier 1000", CONFIG.TIER_ON[1000], function(v) CONFIG.TIER_ON[1000] = v end)
+addToggle(TierBox, "Tier 100", CONFIG.TIER_ON[100], function(v) CONFIG.TIER_ON[100] = v end)
+addToggle(TierBox, "Tier 10", CONFIG.TIER_ON[10], function(v) CONFIG.TIER_ON[10] = v end)
+addToggle(TierBox, "Tier 1", CONFIG.TIER_ON[1], function(v) CONFIG.TIER_ON[1] = v end)
 addStepper(FarmTab, "Search Delay (ms)", 0, 1000, 50, CONFIG.SCAN_DELAY, function(v) CONFIG.SCAN_DELAY = v end)
 addToggle(FarmTab, "Reduce Lag", CONFIG.PURGE, function(v) CONFIG.PURGE = v end)
-addToggle(FarmTab, "Use E Key", CONFIG.USE_E_KEY, function(v) CONFIG.USE_E_KEY = v end)
 addStepper(FarmTab, "Herb Button Up (px)", 0, 300, 20, CONFIG.PROMPT_UP, function(v)
     CONFIG.PROMPT_UP = v
     refreshPromptUi()
@@ -1089,11 +1170,11 @@ local yesBtn = confirmBtn("Yes, Delete", 0.5, RED)
 closeBtn.MouseButton1Click:Connect(function() confirm.Visible = true end)
 cancelBtn.MouseButton1Click:Connect(function() confirm.Visible = false end)
 yesBtn.MouseButton1Click:Connect(function()
-    SaveNow()
-    ConfigLocked = true
     CONFIG.ENABLED = false
     CONFIG.FARM = false
+    CONFIG.TWEEN_FARM = false
     farmId = farmId + 1
+    tweenId = tweenId + 1
     setEspPlayers(false)
     setEspHerb(false)
     gui:Destroy()
@@ -1147,10 +1228,6 @@ TS:Create(loader, TweenInfo.new(0.35), {GroupTransparency = 1}):Play()
 task.wait(0.4)
 loader:Destroy()
 
--- Nothing runs before this point. Now restore the saved feature states.
+-- Nothing runs before this point.
 READY = true
 setupPromptUi()
-if CONFIG.FARM then setFarm(true) end
-if CONFIG.ESP_HERB then setEspHerb(true) end
-if CONFIG.ESP_PLAYERS then setEspPlayers(true) end
-if CONFIG.BREAKTHROUGH then setBreakthrough(true) end
