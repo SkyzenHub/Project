@@ -8,6 +8,9 @@ local VIM=game:GetService("VirtualInputManager")
 local ReplicatedStorage=game:GetService("ReplicatedStorage")
 local LocalPlayer=Players.LocalPlayer or Players.PlayerAdded:Wait()
 
+--============================================================
+-- SETTINGS  (semua on/off & angka di sini)
+--============================================================
 local TITLE="SKYZENHUB - Herb v13"
 local PHOTO_URL="https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL=PHOTO_URL
@@ -15,13 +18,41 @@ local LOADING_URL="https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/
 local LOAD_TIME=10
 
 local CONFIG={
- ENABLED=true,FARM=false,TWEEN_FARM=false,TWEEN_SPEED=150,SCAN_DELAY=100,PURGE=false,
- TIER_ON={[1000]=true,[100]=true,[10]=true,[1]=true},PROMPT_UP=100,ANTI_AFK=true,
- ESP_HERB=false,ESP_PLAYERS=false,BREAKTHROUGH=false,BT_INTERVAL=3,BT_DELAY=3,
- KA_ENABLED=false,KA_RANGE=150,KA_DAMAGE=500,KA_FIRE_RATE=50,KA_SPEED_MULT=5,
- KA_INSTANT=true,KA_MAX_PER_FRAME=8,KA_WHITELIST_FRIENDS=true,
+ -- master
+ ENABLED=true,
+ -- herb farm
+ FARM=false,
+ TWEEN_FARM=false,
+ TWEEN_SPEED=150,
+ SCAN_DELAY=100,
+ PURGE=false,
+ TIER_ON={[1000]=false,[100]=false,[10]=false,[1]=false},
+ PROMPT_UP=100,
+ -- misc
+ ANTI_AFK=false,
+ -- esp
+ ESP_HERB=false,
+ ESP_PLAYERS=false,
+ -- cultivate
+ BREAKTHROUGH=false,
+ BT_INTERVAL=3,
+ BT_DELAY=3,
+ -- kill aura
+ KA_ENABLED=false,
+ KA_RANGE=150,
+ KA_DAMAGE=500,
+ KA_FIRE_RATE=50,
+ KA_SPEED_MULT=5,
+ KA_INSTANT=true,
+ KA_MAX_PER_FRAME=8,
+ KA_WHITELIST_FRIENDS=true,
 }
+
 local TIERS={1000,100,10,1}
+--============================================================
+-- END SETTINGS
+--============================================================
+
 local function activeTiers()
  local list={}
  for _,t in ipairs(TIERS) do if CONFIG.TIER_ON[t] then list[#list+1]=t end end
