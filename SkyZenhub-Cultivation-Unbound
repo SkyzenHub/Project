@@ -2,7 +2,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
-local HttpService = game:GetService("HttpService")
 local VirtualUser = game:GetService("VirtualUser")
 local VIM = game:GetService("VirtualInputManager")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -11,7 +10,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS (edit here)
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v13"
+local TITLE = "SKYZENHUB - Herb v19"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -24,24 +23,29 @@ local CONFIG = {
     TWEEN_SPEED = 150,   -- 10 - 500
     SCAN_DELAY = 100,    -- ms, 0 - 1000
     PURGE = false,
-    TIER_ON = { [1000] = true, [100] = true, [10] = true, [1] = true }, -- which herb tiers to farm
+    TIER_ON = { [1000] = false, [100] = false, [10] = false, [1] = false }, -- none selected = all tiers
     PROMPT_UP = 100,     -- px, moves the on-screen herb button up (0 - 300)
-    ANTI_AFK = true,
+    ANTI_AFK = false,
     ESP_HERB = false,
     ESP_PLAYERS = false,
     BREAKTHROUGH = false,
+    NPC_ATTACK = false,  -- auto attack NPCs only (never players)
+    NPC_RANGE = 15,      -- studs, 5 - 60
+    ATTACK_DELAY = 300,  -- ms between hits, 100 - 2000
+    HIT_TYPE = 1,        -- value sent with CombatHit (seen in the log: 1 and 3)
     BT_INTERVAL = 3,     -- seconds, 1 - 60
     BT_DELAY = 3,        -- seconds the minigame takes before the result is sent, 1 - 15
 }
 
 local TIERS = { 1000, 100, 10, 1 }
 
--- only the tiers that are switched ON in the Farm tab (priority stays 1000 > 100 > 10 > 1)
+-- only the tiers that are switched ON in the Farm tab (none selected = all tiers, priority 1000 > 100 > 10 > 1)
 local function activeTiers()
     local list = {}
     for _, tier in ipairs(TIERS) do
         if CONFIG.TIER_ON[tier] then list[#list + 1] = tier end
     end
+    if #list == 0 then return TIERS end -- nothing selected: farm every tier
     return list
 end
 
@@ -98,6 +102,7 @@ local function purgeMap(spots)
         if obj ~= spots
             and obj ~= workspace.CurrentCamera
             and obj.Name ~= "Terrain"
+            and obj.Name ~= "CultivatorCamps"
             and not Players:GetPlayerFromCharacter(obj)
             and (obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("Folder")) then
             pcall(function() obj:Destroy() end)
@@ -535,6 +540,84 @@ local function setBreakthrough(v)
             end
 
             task.wait(CONFIG.BT_INTERVAL)
+        end
+    end)
+end
+
+-- Auto Attack NPC (CombatHit, NPCs inside workspace.CultivatorCamps only - players are never targeted)
+local combatId = 0
+local npcCache = {}
+local npcScanAt = 0
+
+local function isNpcModel(model)
+    if not model:IsA("Model") then return false end
+    if Players:GetPlayerFromCharacter(model) then return false end -- never a player
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if hum and hum.Health <= 0 then return false end
+    return true
+end
+
+local function scanNpcs()
+    npcCache = {}
+    local camps = workspace:FindFirstChild("CultivatorCamps")
+    if not camps then return end
+
+    -- NPCs that have a Humanoid anywhere inside the camps
+    for _, d in ipairs(camps:GetDescendants()) do
+        if d:IsA("Humanoid") then
+            local model = d.Parent
+            if model and isNpcModel(model) then npcCache[#npcCache + 1] = model end
+        end
+    end
+
+    -- NPC models that sit directly inside the camps folder (like in the Cobalt log)
+    if #npcCache == 0 then
+        for _, child in ipairs(camps:GetChildren()) do
+            if isNpcModel(child) then npcCache[#npcCache + 1] = child end
+        end
+    end
+end
+
+local function nearestNpc(hrp)
+    if os.clock() - npcScanAt > 2 then
+        npcScanAt = os.clock()
+        scanNpcs()
+    end
+
+    local best, bestDist = nil, CONFIG.NPC_RANGE
+    for _, model in ipairs(npcCache) do
+        if model.Parent and isNpcModel(model) then
+            local pos = getPos(model)
+            if pos then
+                local dist = (pos - hrp.Position).Magnitude
+                if dist <= bestDist then
+                    best, bestDist = model, dist
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function setNpcAttack(v)
+    CONFIG.NPC_ATTACK = v
+    combatId = combatId + 1
+    if not v then return end
+
+    local id = combatId
+    npcScanAt = 0
+    task.spawn(function()
+        while CONFIG.ENABLED and CONFIG.NPC_ATTACK and combatId == id do
+            local ev = getCultivationEvent("CombatHit")
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if ev and hrp then
+                local target = nearestNpc(hrp)
+                if target then
+                    pcall(function() ev:FireServer(target, CONFIG.HIT_TYPE) end)
+                end
+            end
+            task.wait(CONFIG.ATTACK_DELAY / 1000)
         end
     end)
 end
@@ -1058,37 +1141,50 @@ local function addSection(page, title, startOpen)
     return body
 end
 
--- Tab Farm
+-- Tab Farm (settings on top, ON/OFF switches below)
 local FarmTab = createTab("Farm")
-addToggle(FarmTab, "Instant Herb", CONFIG.FARM, setFarm)
-addToggle(FarmTab, "Auto Farm (Tween)", CONFIG.TWEEN_FARM, setTweenFarm)
-addStepper(FarmTab, "Move Speed", 10, 500, 10, CONFIG.TWEEN_SPEED, function(v) CONFIG.TWEEN_SPEED = v end)
-local TierBox = addSection(FarmTab, "Select Tier", false)
+
+local TierBox = addSection(FarmTab, "Select Tier (Herb)", false)
 addToggle(TierBox, "Tier 1000", CONFIG.TIER_ON[1000], function(v) CONFIG.TIER_ON[1000] = v end)
 addToggle(TierBox, "Tier 100", CONFIG.TIER_ON[100], function(v) CONFIG.TIER_ON[100] = v end)
 addToggle(TierBox, "Tier 10", CONFIG.TIER_ON[10], function(v) CONFIG.TIER_ON[10] = v end)
 addToggle(TierBox, "Tier 1", CONFIG.TIER_ON[1], function(v) CONFIG.TIER_ON[1] = v end)
-addStepper(FarmTab, "Search Delay (ms)", 0, 1000, 50, CONFIG.SCAN_DELAY, function(v) CONFIG.SCAN_DELAY = v end)
-addToggle(FarmTab, "Reduce Lag", CONFIG.PURGE, function(v) CONFIG.PURGE = v end)
-addStepper(FarmTab, "Herb Button Up (px)", 0, 300, 20, CONFIG.PROMPT_UP, function(v)
+
+local FarmSet = addSection(FarmTab, "Farm Settings", false)
+addStepper(FarmSet, "Tween Speed", 10, 500, 10, CONFIG.TWEEN_SPEED, function(v) CONFIG.TWEEN_SPEED = v end)
+addStepper(FarmSet, "Search Delay (ms)", 0, 1000, 50, CONFIG.SCAN_DELAY, function(v) CONFIG.SCAN_DELAY = v end)
+addStepper(FarmSet, "Herb Button Up (px)", 0, 300, 20, CONFIG.PROMPT_UP, function(v)
     CONFIG.PROMPT_UP = v
     refreshPromptUi()
 end)
+
+addToggle(FarmTab, "Instant Herb", CONFIG.FARM, setFarm)
+addToggle(FarmTab, "Auto Farm (Tween)", CONFIG.TWEEN_FARM, setTweenFarm)
 
 -- Tab ESP
 local EspTab = createTab("ESP")
 addToggle(EspTab, "ESP Herb", CONFIG.ESP_HERB, setEspHerb)
 addToggle(EspTab, "ESP Player", CONFIG.ESP_PLAYERS, setEspPlayers)
 
--- Tab Cultivate
+-- Tab Cultivate (all settings on top, ON/OFF switches below)
 local CultTab = createTab("Cultivate")
+
+local CultSet = addSection(CultTab, "Breakthrough Settings", false)
+addStepper(CultSet, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
+addStepper(CultSet, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
+
+local NpcSet = addSection(CultTab, "NPC Settings", false)
+addStepper(NpcSet, "Attack Range (studs)", 5, 60, 5, CONFIG.NPC_RANGE, function(v) CONFIG.NPC_RANGE = v end)
+addStepper(NpcSet, "Attack Delay (ms)", 100, 2000, 100, CONFIG.ATTACK_DELAY, function(v) CONFIG.ATTACK_DELAY = v end)
+addStepper(NpcSet, "Hit Type (1-3)", 1, 3, 1, CONFIG.HIT_TYPE, function(v) CONFIG.HIT_TYPE = v end)
+
 addToggle(CultTab, "Auto Breakthrough", CONFIG.BREAKTHROUGH, setBreakthrough)
-addStepper(CultTab, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
-addStepper(CultTab, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
+addToggle(CultTab, "Auto Attack NPC", CONFIG.NPC_ATTACK, setNpcAttack)
 
 -- Tab Misc
 local MiscTab = createTab("Misc")
 addToggle(MiscTab, "Anti AFK", CONFIG.ANTI_AFK, function(v) CONFIG.ANTI_AFK = v end)
+addToggle(MiscTab, "Booster FPS", CONFIG.PURGE, function(v) CONFIG.PURGE = v end)
 
 selectTab("Farm")
 
@@ -1173,6 +1269,8 @@ yesBtn.MouseButton1Click:Connect(function()
     CONFIG.ENABLED = false
     CONFIG.FARM = false
     CONFIG.TWEEN_FARM = false
+    CONFIG.NPC_ATTACK = false
+    combatId = combatId + 1
     farmId = farmId + 1
     tweenId = tweenId + 1
     setEspPlayers(false)
