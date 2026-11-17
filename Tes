@@ -27,6 +27,7 @@ local CONFIG = {
     TIER_ON = { [1000] = true, [100] = true, [10] = true, [1] = true },
     PROMPT_UP = 100,
     ANTI_AFK = true,
+    BREW_AUTO = false,
     ESP_HERB = false,
     ESP_PLAYERS = false,
     BREAKTHROUGH = false,
@@ -642,6 +643,55 @@ local function setKillAura(v)
     end
 end
 
+-- Perfect Brew + Auto Claim (siklus 0.5 detik)
+local brewId = 0
+local PERFECT_STOKE = 2.3241790770116495
+
+local function getCauldronStoke()
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild("CauldronStoke")
+end
+
+local function getCauldronClaim()
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild("CauldronClaim")
+end
+
+local function perfectBrewOnce()
+    local ev = getCauldronStoke()
+    if ev then
+        pcall(function() ev:FireServer(PERFECT_STOKE) end)
+        return true
+    end
+    return false
+end
+
+local function claimOnce()
+    local ev = getCauldronClaim()
+    if ev then
+        pcall(function() ev:FireServer() end)
+        return true
+    end
+    return false
+end
+
+local function brewLoop(id)
+    while CONFIG.ENABLED and CONFIG.BREW_AUTO and brewId == id do
+        perfectBrewOnce()
+        task.wait(0.05)
+        claimOnce()
+        task.wait(0.5)
+    end
+end
+
+local function setAutoBrew(v)
+    CONFIG.BREW_AUTO = v
+    brewId = brewId + 1
+    if v then
+        task.spawn(brewLoop, brewId)
+    end
+end
+
 -- Anti AFK
 LocalPlayer.Idled:Connect(function()
     if READY and CONFIG.ANTI_AFK and CONFIG.ENABLED then
@@ -1174,6 +1224,7 @@ addStepper(FarmTab, "Herb Button Up (px)", 0, 300, 20, CONFIG.PROMPT_UP, functio
 end)
 addToggle(FarmTab, "Auto Farm (Tween)", CONFIG.TWEEN_FARM, setTweenFarm)
 addToggle(FarmTab, "Instant Herb", CONFIG.FARM, setFarm)
+addToggle(FarmTab, "Perfect Brew", CONFIG.BREW_AUTO, setAutoBrew)
 
 -- Tab ESP
 local EspTab = createTab("ESP")
@@ -1277,11 +1328,13 @@ yesBtn.MouseButton1Click:Connect(function()
     CONFIG.FARM = false
     CONFIG.TWEEN_FARM = false
     CONFIG.KA_ENABLED = false
+    CONFIG.BREW_AUTO = false
     local sf = getSwordFlight()
     if sf then pcall(function() sf:FireServer(false) end) end
     farmId = farmId + 1
     tweenId = tweenId + 1
     kaId = kaId + 1
+    brewId = brewId + 1
     setEspPlayers(false)
     setEspHerb(false)
     gui:Destroy()
