@@ -11,11 +11,279 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v16"
+local TITLE = "SKYZENHUB - Herb v19"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
 local LOAD_TIME = 10
+
+------------------------------------------------------------
+-- KEY SYSTEM
+-- Fitur script baru dijalankan setelah key valid.
+------------------------------------------------------------
+do
+    local KEY_URL = "https://web-key-system.netlify.app/api/check"
+    local KEY_FILE = "SkyZenHub_Key.txt"
+
+    -- Gambar key memakai gambar script Herb (PHOTO_URL dan LOGO_URL di atas)
+    local KEY_BG_URL = PHOTO_URL
+    local KEY_LOGO_URL = LOGO_URL
+
+    local Players = game:GetService("Players")
+    local HttpService = game:GetService("HttpService")
+    local Analytics = game:GetService("RbxAnalyticsService")
+    local LP = Players.LocalPlayer
+    local HWID = Analytics:GetClientId()
+    local parent = (gethui and gethui()) or game:GetService("CoreGui")
+
+    -- Key tidak disimpan. Hapus file key lama dari versi sebelumnya (kalau ada).
+    if isfile and delfile then
+        pcall(function()
+            if isfile(KEY_FILE) then delfile(KEY_FILE) end
+        end)
+    end
+
+    local RED = Color3.fromRGB(230, 30, 55)
+    local verified = false
+    local busy = false
+
+    local old = parent:FindFirstChild("SkyZenKeyGui")
+    if old then old:Destroy() end
+
+    local kg = Instance.new("ScreenGui")
+    kg.Name = "SkyZenKeyGui"
+    kg.ResetOnSpawn = false
+    kg.Parent = parent
+
+    local fr = Instance.new("Frame", kg)
+    fr.AnchorPoint = Vector2.new(0.5, 0.5)
+    fr.Position = UDim2.new(0.5, 0, 0.5, 0)
+    fr.Size = UDim2.new(0, 290, 0, 260)
+    fr.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+    fr.ClipsDescendants = true
+    fr.Active = true
+    Instance.new("UICorner", fr).CornerRadius = UDim.new(0, 12)
+    local st = Instance.new("UIStroke", fr)
+    st.Color = RED
+    st.Thickness = 1.5
+
+    -- Latar gambar (muncul setelah gambar selesai diunduh)
+    local bgImg = Instance.new("ImageLabel", fr)
+    bgImg.Size = UDim2.new(1, 0, 1, 0)
+    bgImg.BackgroundTransparency = 1
+    bgImg.ScaleType = Enum.ScaleType.Crop
+    bgImg.ImageTransparency = 1
+    bgImg.ZIndex = 1
+    Instance.new("UICorner", bgImg).CornerRadius = UDim.new(0, 12)
+
+    local shade = Instance.new("Frame", fr)
+    shade.Size = UDim2.new(1, 0, 1, 0)
+    shade.BackgroundColor3 = Color3.new(0, 0, 0)
+    shade.BackgroundTransparency = 0.45
+    shade.BorderSizePixel = 0
+    shade.ZIndex = 2
+    Instance.new("UICorner", shade).CornerRadius = UDim.new(0, 12)
+
+    -- Logo bulat di atas
+    local logoFrame = Instance.new("Frame", fr)
+    logoFrame.AnchorPoint = Vector2.new(0.5, 0)
+    logoFrame.Position = UDim2.new(0.5, 0, 0, 14)
+    logoFrame.Size = UDim2.new(0, 60, 0, 60)
+    logoFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+    logoFrame.ZIndex = 3
+    Instance.new("UICorner", logoFrame).CornerRadius = UDim.new(1, 0)
+    local logoStroke = Instance.new("UIStroke", logoFrame)
+    logoStroke.Color = RED
+    logoStroke.Thickness = 2
+
+    local logoImg = Instance.new("ImageLabel", logoFrame)
+    logoImg.Size = UDim2.new(1, 0, 1, 0)
+    logoImg.BackgroundTransparency = 1
+    logoImg.ScaleType = Enum.ScaleType.Crop
+    logoImg.ImageTransparency = 1
+    logoImg.ZIndex = 4
+    Instance.new("UICorner", logoImg).CornerRadius = UDim.new(1, 0)
+
+    local ttl = Instance.new("TextLabel", fr)
+    ttl.Size = UDim2.new(1, 0, 0, 26)
+    ttl.Position = UDim2.new(0, 0, 0, 80)
+    ttl.BackgroundTransparency = 1
+    ttl.Text = "SkyZenHub"
+    ttl.Font = Enum.Font.GothamBlack
+    ttl.TextSize = 16
+    ttl.TextColor3 = Color3.fromRGB(235, 235, 240)
+    ttl.ZIndex = 3
+
+    local kb = Instance.new("TextBox", fr)
+    kb.Size = UDim2.new(1, -86, 0, 38)
+    kb.Position = UDim2.new(0, 15, 0, 114)
+    kb.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+    kb.BackgroundTransparency = 0.15
+    kb.PlaceholderText = "Enter key"
+    kb.Text = ""
+    kb.ClearTextOnFocus = false
+    kb.Font = Enum.Font.GothamBold
+    kb.TextSize = 14
+    kb.TextColor3 = Color3.new(1, 1, 1)
+    kb.ZIndex = 3
+    Instance.new("UICorner", kb).CornerRadius = UDim.new(0, 8)
+
+    -- Teks key: default disembunyikan ("*"), bisa dilihat lewat tombol Show/Hide.
+    -- Key asli selalu disimpan di realKey.
+    local realKey = ""
+    local masking = false
+    local showKey = false
+
+    local function renderKey()
+        masking = true
+        kb.Text = showKey and realKey or string.rep("*", #realKey)
+        masking = false
+    end
+
+    kb:GetPropertyChangedSignal("Text"):Connect(function()
+        if masking then return end
+        local t = kb.Text:gsub("%s", "")
+        if showKey then
+            realKey = t
+        else
+            local stars = select(2, t:gsub("%*", ""))
+            local added = t:gsub("%*", "")
+            realKey = realKey:sub(1, stars) .. added
+        end
+        renderKey()
+    end)
+
+    local eye = Instance.new("TextButton", fr)
+    eye.Size = UDim2.new(0, 52, 0, 38)
+    eye.Position = UDim2.new(1, -67, 0, 114)
+    eye.BackgroundColor3 = Color3.fromRGB(35, 35, 44)
+    eye.Text = "Show"
+    eye.Font = Enum.Font.GothamBold
+    eye.TextSize = 12
+    eye.TextColor3 = Color3.new(1, 1, 1)
+    eye.ZIndex = 3
+    Instance.new("UICorner", eye).CornerRadius = UDim.new(0, 8)
+
+    eye.MouseButton1Click:Connect(function()
+        showKey = not showKey
+        eye.Text = showKey and "Hide" or "Show"
+        renderKey()
+    end)
+
+    local btn = Instance.new("TextButton", fr)
+    btn.Size = UDim2.new(1, -30, 0, 38)
+    btn.Position = UDim2.new(0, 15, 0, 160)
+    btn.BackgroundColor3 = RED
+    btn.Text = "Verify"
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.ZIndex = 3
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+
+    local status = Instance.new("TextLabel", fr)
+    status.Size = UDim2.new(1, -30, 0, 40)
+    status.Position = UDim2.new(0, 15, 0, 206)
+    status.BackgroundTransparency = 1
+    status.Text = ""
+    status.Font = Enum.Font.Gotham
+    status.TextSize = 12
+    status.TextWrapped = true
+    status.TextColor3 = Color3.fromRGB(210, 210, 220)
+    status.ZIndex = 3
+
+    -- Unduh gambar di belakang layar, kotak key tetap langsung tampil
+    local function keyImage(url, fname)
+        if url == "" or not writefile then return nil end
+        local getAsset = getcustomasset or getsynasset
+        if not getAsset then return nil end
+
+        local function isImg(d)
+            if type(d) ~= "string" or #d < 100 then return false end
+            local h = d:sub(1, 4)
+            return h == "\137PNG" or h:sub(1, 2) == "\255\216" or h == "RIFF"
+        end
+
+        local data
+        local req = (syn and syn.request) or request or http_request
+        if req then
+            local ok, res = pcall(function() return req({Url = url, Method = "GET"}) end)
+            if ok and res and isImg(res.Body) then data = res.Body end
+        end
+        if not data then
+            local ok, r = pcall(function() return game:HttpGet(url) end)
+            if ok and isImg(r) then data = r end
+        end
+        if not data then return nil end
+        if not pcall(writefile, fname, data) then return nil end
+        local ok, id = pcall(getAsset, fname)
+        if ok then return id end
+        return nil
+    end
+
+    task.spawn(function()
+        local bgId = keyImage(KEY_BG_URL, "skyzenhub_bg.png")
+        if bgId and bgImg.Parent then
+            bgImg.Image = bgId
+            bgImg.ImageTransparency = 0
+        end
+
+        local logoId
+        if KEY_LOGO_URL == KEY_BG_URL then
+            logoId = bgId
+        else
+            logoId = keyImage(KEY_LOGO_URL, "skyzenhub_logo.png")
+        end
+        if logoId and logoImg.Parent then
+            logoImg.Image = logoId
+            logoImg.ImageTransparency = 0
+        end
+    end)
+
+    local MESSAGES = {
+        KEY_SALAH = "Invalid key!",
+        HWID_SALAH = "This key is already used on another device!",
+        EXPIRED = "This key has expired!",
+    }
+
+    btn.MouseButton1Click:Connect(function()
+        if busy or verified then return end
+        local key = realKey
+        if key == "" then
+            status.Text = "Please enter a key."
+            return
+        end
+
+        busy = true
+        status.Text = "Checking key..."
+
+        local ok, res = pcall(function()
+            return game:HttpGet(KEY_URL .. "?key=" .. HttpService:UrlEncode(key) .. "&hwid=" .. HttpService:UrlEncode(HWID))
+        end)
+
+        if not ok then
+            status.Text = "Failed to connect to the server. Try again."
+            busy = false
+            return
+        end
+
+        res = tostring(res):gsub("%s", "")
+        if res == "OK" then
+            status.Text = "Key valid!"
+            task.wait(0.4)
+            kg:Destroy()
+            verified = true
+        else
+            local msg = MESSAGES[res] or "Invalid key!"
+            status.Text = msg
+            task.wait(1.5)
+            LP:Kick(msg)
+        end
+    end)
+
+    -- Tahan seluruh script di sini sampai key valid
+    repeat task.wait(0.2) until verified
+end
 
 local CONFIG = {
     ENABLED = true,
@@ -32,7 +300,8 @@ local CONFIG = {
     ESP_CHEST = false,
     NPC_KA = false,
     NPC_KA_RANGE = 100,
-    NPC_KA_MAX = 5,
+    NPC_KA_MAX = 3,
+    NPC_KA_DELAY = 50,
     ESP_HERB = false,
     ESP_PLAYERS = false,
     BREAKTHROUGH = false,
@@ -677,44 +946,127 @@ local function setKillAura(v)
     end
 end
 
--- ESP Chest
+-- ESP Chest (real-time: hilang otomatis saat chest diambil)
 local chestEsp = {}
-local chestLoopId = 0
+local chestConns = {}
+local chestRunId = 0
+
+local CHEST_TYPES = { "Wooden", "Bronze", "Jade", "Celestial" }
 local CHEST_COLORS = {
     wooden = Color3.fromRGB(170, 110, 60),
     bronze = Color3.fromRGB(235, 140, 50),
     jade = Color3.fromRGB(70, 230, 140),
     celestial = Color3.fromRGB(120, 200, 255),
 }
+local CHEST_ATTR_KEYS = { "ChestType", "Type", "Rarity", "Tier", "ChestName", "DisplayName" }
+local CHEST_TAKEN_KEYS = { "Collected", "Opened", "Taken", "Claimed", "Looted" }
 
-local function chestColor(name)
-    local n = string.lower(name)
-    for key, col in pairs(CHEST_COLORS) do
-        if string.find(n, key, 1, true) then return col end
+local function isChestName(name)
+    return string.find(string.lower(name), "chest", 1, true) ~= nil
+end
+
+-- Jenis chest: dari attribute, atau dari nama chest / nama folder di atasnya
+local function chestType(obj)
+    for _, k in ipairs(CHEST_ATTR_KEYS) do
+        local v = obj:GetAttribute(k)
+        if type(v) == "string" then
+            local lv = string.lower(v)
+            for _, t in ipairs(CHEST_TYPES) do
+                if string.find(lv, string.lower(t), 1, true) then return t end
+            end
+        end
+    end
+    local cur = obj
+    while cur and cur ~= workspace do
+        local ln = string.lower(cur.Name)
+        for _, t in ipairs(CHEST_TYPES) do
+            if string.find(ln, string.lower(t), 1, true) then return t end
+        end
+        cur = cur.Parent
+    end
+    return nil
+end
+
+local function chestDisplayName(obj)
+    local t = chestType(obj)
+    if t then return t .. " Chest", t end
+    local n = obj.Name:gsub("_", " ")
+    n = n:gsub("(%l)(%u)", "%1 %2")
+    return n, nil
+end
+
+local function chestColorOf(typeName)
+    if typeName then
+        return CHEST_COLORS[string.lower(typeName)] or Color3.fromRGB(255, 235, 120)
     end
     return Color3.fromRGB(255, 235, 120)
 end
 
-local function isChestName(name)
-    local n = string.lower(name)
-    return string.find(n, "chest", 1, true) ~= nil and n ~= "chests"
-end
+local function chestIsCandidate(obj)
+    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return false end
+    if not isChestName(obj.Name) then return false end
+    if Players:GetPlayerFromCharacter(obj) then return false end
 
-local function clearChestEsp()
-    for _, d in pairs(chestEsp) do
-        pcall(function() d.bb:Destroy() end)
+    if obj:IsA("Model") then
+        -- nama jamak (Chests, ChestSpawns) = wadah, bukan chest
+        local ln = string.lower(obj.Name)
+        if string.sub(ln, -1) == "s" and string.sub(ln, -2) ~= "ss" then return false end
+        -- model yang masih berisi model chest lain = wadah
+        for _, d in ipairs(obj:GetDescendants()) do
+            if d:IsA("Model") and isChestName(d.Name) then return false end
+        end
+    else
+        -- part di dalam model chest: cukup modelnya saja
+        local p = obj.Parent
+        if p and p:IsA("Model") and isChestName(p.Name) then return false end
     end
-    chestEsp = {}
+    return true
 end
 
-local function addChestEsp(obj)
+local function chestUnregister(obj)
+    local d = chestEsp[obj]
+    if d then
+        pcall(function() d.bb:Destroy() end)
+        chestEsp[obj] = nil
+    end
+end
+
+local function chestRegister(obj)
+    if chestEsp[obj] then return end
+    if not obj:IsDescendantOf(workspace) then return end
+    if not chestIsCandidate(obj) then return end
+
     local adornee = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
     if not adornee then return end
 
-    local color = chestColor(obj.Name)
+    -- jangan dobel kalau ada ESP lain di titik yang sama (chest yang terdiri dari banyak part)
+    for _, d in pairs(chestEsp) do
+        if d.adornee.Parent and (d.adornee.Position - adornee.Position).Magnitude < 6 then
+            return
+        end
+    end
+
+    local parts, hadVisible = {}, false
+    if obj:IsA("BasePart") then
+        parts[1] = obj
+    else
+        for _, p in ipairs(obj:GetDescendants()) do
+            if p:IsA("BasePart") then
+                parts[#parts + 1] = p
+                if #parts >= 40 then break end
+            end
+        end
+    end
+    for _, p in ipairs(parts) do
+        if p.Transparency < 0.9 then hadVisible = true break end
+    end
+
+    local name, tname = chestDisplayName(obj)
+    local color = chestColorOf(tname)
+
     local bb = Instance.new("BillboardGui")
     bb.Name = "ChestESP"
-    bb.Size = UDim2.new(0, 180, 0, 24)
+    bb.Size = UDim2.new(0, 190, 0, 24)
     bb.AlwaysOnTop = true
     bb.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
     bb.Adornee = adornee
@@ -727,154 +1079,260 @@ local function addChestEsp(obj)
     label.TextSize = 13
     label.TextColor3 = color
     label.TextStrokeTransparency = 0
-    label.Text = obj.Name
+    label.Text = name
     label.Parent = bb
 
-    chestEsp[obj] = { bb = bb, label = label, adornee = adornee }
+    chestEsp[obj] = {
+        obj = obj,
+        bb = bb,
+        label = label,
+        adornee = adornee,
+        name = name,
+        parts = parts,
+        hadVisible = hadVisible,
+        prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true),
+    }
+end
+
+local function chestTaken(d)
+    local obj = d.obj
+    if not obj.Parent or not d.adornee.Parent then return true end
+    if not obj:IsDescendantOf(workspace) then return true end
+    for _, k in ipairs(CHEST_TAKEN_KEYS) do
+        if obj:GetAttribute(k) == true then return true end
+    end
+    if d.prompt and (not d.prompt.Parent or not d.prompt.Enabled) then return true end
+    if d.hadVisible then
+        local anyVisible = false
+        for _, p in ipairs(d.parts) do
+            if p.Parent and p.Transparency < 0.95 then anyVisible = true break end
+        end
+        if not anyVisible then return true end
+    end
+    return false
+end
+
+local function chestTick()
+    local char = LocalPlayer.Character
+    local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+    local gone = {}
+    for obj, d in pairs(chestEsp) do
+        if chestTaken(d) then
+            gone[#gone + 1] = obj
+        else
+            local text = d.name
+            if myRoot then
+                text = text .. " | " .. math.floor((d.adornee.Position - myRoot.Position).Magnitude) .. "m"
+            end
+            d.label.Text = text
+        end
+    end
+    for _, obj in ipairs(gone) do chestUnregister(obj) end
+end
+
+local function chestFullScan(id)
+    local n = 0
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        n = n + 1
+        if n % 400 == 0 then
+            task.wait()
+            if chestRunId ~= id then return end
+        end
+        if (obj:IsA("Model") or obj:IsA("BasePart")) and isChestName(obj.Name) then
+            chestRegister(obj)
+        end
+    end
+end
+
+local function clearChestEsp()
+    for _, c in ipairs(chestConns) do pcall(function() c:Disconnect() end) end
+    chestConns = {}
+    for obj in pairs(chestEsp) do chestUnregister(obj) end
+    chestEsp = {}
 end
 
 local function setEspChest(v)
     CONFIG.ESP_CHEST = v
-    chestLoopId = chestLoopId + 1
+    chestRunId = chestRunId + 1
     clearChestEsp()
     if not v then return end
 
-    local id = chestLoopId
-    task.spawn(function()
-        while CONFIG.ENABLED and CONFIG.ESP_CHEST and chestLoopId == id do
-            local char = LocalPlayer.Character
-            local myRoot = char and char:FindFirstChild("HumanoidRootPart")
-            local seen = {}
+    local id = chestRunId
 
-            for _, obj in ipairs(workspace:GetDescendants()) do
-                if (obj:IsA("Model") or obj:IsA("BasePart")) and isChestName(obj.Name) then
-                    local skip = false
-                    local p = obj.Parent
-                    if obj:IsA("BasePart") and p and p:IsA("Model") and isChestName(p.Name) then
-                        skip = true
-                    end
-                    if not skip and not Players:GetPlayerFromCharacter(obj) then
-                        seen[obj] = true
-                        local d = chestEsp[obj]
-                        if not d or not d.bb.Parent then
-                            addChestEsp(obj)
-                            d = chestEsp[obj]
-                        end
-                        if d then
-                            local text = obj.Name
-                            local pos = getPos(obj)
-                            if myRoot and pos then
-                                text = text .. " | " .. math.floor((pos - myRoot.Position).Magnitude) .. "m"
-                            end
-                            d.label.Text = text
-                        end
-                    end
-                end
-            end
-
-            local stale = {}
-            for obj in pairs(chestEsp) do
-                if not seen[obj] then stale[#stale + 1] = obj end
-            end
-            for _, obj in ipairs(stale) do
-                pcall(function() chestEsp[obj].bb:Destroy() end)
-                chestEsp[obj] = nil
-            end
-
-            task.wait(1.5)
+    -- Real-time: chest baru muncul -> langsung didaftarkan, chest hilang -> langsung dihapus
+    chestConns[#chestConns + 1] = workspace.DescendantAdded:Connect(function(obj)
+        if (obj:IsA("Model") or obj:IsA("BasePart")) and isChestName(obj.Name) then
+            task.defer(function()
+                if chestRunId == id then chestRegister(obj) end
+            end)
         end
-        if chestLoopId == id then clearChestEsp() end
+    end)
+    chestConns[#chestConns + 1] = workspace.DescendantRemoving:Connect(function(obj)
+        if chestEsp[obj] then chestUnregister(obj) end
+    end)
+
+    -- Server mengabari perubahan chest -> cek ulang seketika
+    task.spawn(function()
+        local folder = ReplicatedStorage:WaitForChild("CultivationEvents", 10)
+        local ev = folder and folder:WaitForChild("ChestSync", 5)
+        if ev and chestRunId == id then
+            chestConns[#chestConns + 1] = ev.OnClientEvent:Connect(function()
+                task.defer(function()
+                    if chestRunId == id then chestTick() end
+                end)
+            end)
+        end
+    end)
+
+    task.spawn(function()
+        chestFullScan(id)
+        local lastScan = os.clock()
+        while CONFIG.ENABLED and CONFIG.ESP_CHEST and chestRunId == id do
+            chestTick()
+            -- jaring pengaman: scan ulang tiap 8 detik kalau ada yang terlewat
+            if os.clock() - lastScan > 8 then
+                lastScan = os.clock()
+                chestFullScan(id)
+            end
+            task.wait(0.1)
+        end
     end)
 end
 
 -- Kill Aura NPC (CombatHit ke NPC, termasuk NPC yang parent-nya nil)
 local npcId = 0
-local npcCandidates = {}
+local npcCandidates = {} -- [model] = rootPart
 
 local function npcIsCandidate(m)
     if not m:IsA("Model") then return false end
     if Players:GetPlayerFromCharacter(m) then return false end
-    local hum = m:FindFirstChildOfClass("Humanoid")
-    if hum then return true end
+    if m:FindFirstChildOfClass("Humanoid") then return true end
     return string.find(m.Name, "Disciple", 1, true) ~= nil
 end
 
-local function npcScan()
+local function npcRootOf(m)
+    return m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+end
+
+-- Scan dipecah per 400 item supaya tidak bikin lag spike
+local function npcScan(id)
     local found = {}
-    for _, d in ipairs(workspace:GetDescendants()) do
-        if d:IsA("Humanoid") then
-            local m = d.Parent
-            if m and npcIsCandidate(m) then found[m] = true end
-        elseif d:IsA("Model") and string.find(d.Name, "Disciple", 1, true) and npcIsCandidate(d) then
-            found[d] = true
+    local n = 0
+    local function add(m)
+        if not found[m] then
+            local r = npcRootOf(m)
+            if r then found[m] = r end
         end
     end
+
+    for _, d in ipairs(workspace:GetDescendants()) do
+        n = n + 1
+        if n % 400 == 0 then
+            task.wait()
+            if npcId ~= id then return end
+        end
+        if d:IsA("Humanoid") then
+            local m = d.Parent
+            if m and npcIsCandidate(m) then add(m) end
+        elseif d:IsA("Model") and string.find(d.Name, "Disciple", 1, true) and npcIsCandidate(d) then
+            add(d)
+        end
+    end
+
     if getnilinstances then
         local ok, nils = pcall(getnilinstances)
         if ok and nils then
             for _, o in ipairs(nils) do
-                if npcIsCandidate(o) then found[o] = true end
+                n = n + 1
+                if n % 400 == 0 then
+                    task.wait()
+                    if npcId ~= id then return end
+                end
+                if o:IsA("Model") and npcIsCandidate(o) then add(o) end
             end
         end
     end
+
     npcCandidates = found
 end
 
-local function npcAlive(m)
-    local hum = m:FindFirstChildOfClass("Humanoid")
-    if hum and hum.Health <= 0 then return false end
-    return true
+local function npcScanLoop(id)
+    while CONFIG.ENABLED and CONFIG.NPC_KA and npcId == id do
+        pcall(npcScan, id)
+        task.wait(3)
+    end
 end
 
--- Damage otomatis dari stat player
+-- Damage otomatis dari stat player (sumber dicari sekali, lalu hanya dibaca)
 local DAMAGE_KEYS = { "damage", "attack", "atk", "dmg", "power", "strength" }
 local DAMAGE_SKIP = { "speed", "cooldown", "rate", "chance", "crit", "range", "multi", "boost" }
 
-local function damageNameOk(name)
+local function damagePriority(name)
     local n = string.lower(name)
     for _, bad in ipairs(DAMAGE_SKIP) do
-        if string.find(n, bad, 1, true) then return false end
+        if string.find(n, bad, 1, true) then return nil end
     end
-    return true
+    for i, key in ipairs(DAMAGE_KEYS) do
+        if string.find(n, key, 1, true) then return i end
+    end
+    return nil
 end
 
-local function npcGetDamage()
+local function npcFindDamageSource()
+    local best, bestP = nil, 99
     local holders = { LocalPlayer, LocalPlayer.Character }
-    for _, key in ipairs(DAMAGE_KEYS) do
-        for _, h in ipairs(holders) do
-            if h then
-                for k, val in pairs(h:GetAttributes()) do
-                    if type(val) == "number" and val > 0 and damageNameOk(k)
-                        and string.find(string.lower(k), key, 1, true) then
-                        return val, k
+    for _, h in ipairs(holders) do
+        if h then
+            for k, val in pairs(h:GetAttributes()) do
+                if type(val) == "number" and val > 0 then
+                    local p = damagePriority(k)
+                    if p and p < bestP then
+                        best, bestP = { kind = "attr", holder = h, key = k }, p
                     end
                 end
-                for _, d in ipairs(h:GetDescendants()) do
-                    if (d:IsA("NumberValue") or d:IsA("IntValue")) and d.Value > 0
-                        and damageNameOk(d.Name)
-                        and string.find(string.lower(d.Name), key, 1, true) then
-                        return d.Value, d.Name
+            end
+            for _, d in ipairs(h:GetDescendants()) do
+                if (d:IsA("NumberValue") or d:IsA("IntValue")) and d.Value > 0 then
+                    local p = damagePriority(d.Name)
+                    if p and p < bestP then
+                        best, bestP = { kind = "value", obj = d, key = d.Name }, p
                     end
                 end
             end
         end
     end
+    return best
+end
+
+local function npcReadDamage(src)
+    if not src then return nil end
+    local v
+    if src.kind == "attr" then
+        if not src.holder.Parent then return nil end
+        v = src.holder:GetAttribute(src.key)
+    else
+        if not src.obj.Parent then return nil end
+        v = src.obj.Value
+    end
+    if type(v) == "number" and v > 0 then return v end
     return nil
 end
 
 -- Lingkaran range
 local npcRing = nil
+local npcRingRadius = -1
 
 local function npcRingDestroy()
     if npcRing then
         pcall(function() npcRing:Destroy() end)
         npcRing = nil
     end
+    npcRingRadius = -1
 end
 
 local function npcRingUpdate(myRoot)
     if not myRoot then
-        if npcRing then npcRing.Adornee = nil end
+        if npcRing and npcRing.Adornee then npcRing.Adornee = nil end
         return
     end
     if not npcRing or not npcRing.Parent then
@@ -889,11 +1347,15 @@ local function npcRingUpdate(myRoot)
         ring.Adornee = myRoot
         ring.Parent = workspace.CurrentCamera
         npcRing = ring
+        npcRingRadius = -1
     end
     if npcRing.Adornee ~= myRoot then npcRing.Adornee = myRoot end
     local r = CONFIG.NPC_KA_RANGE
-    npcRing.Radius = r
-    npcRing.InnerRadius = math.max(r - 0.6, 0)
+    if r ~= npcRingRadius then
+        npcRingRadius = r
+        npcRing.Radius = r
+        npcRing.InnerRadius = math.max(r - 0.6, 0)
+    end
 end
 
 local function npcNotify(text)
@@ -907,52 +1369,66 @@ local function npcNotify(text)
 end
 
 local function npcLoop(id)
-    local lastScan, lastDmg = 0, 0
-    local dmg, src = npcGetDamage()
+    task.spawn(npcScanLoop, id)
+
+    local src = npcFindDamageSource()
+    local dmg = npcReadDamage(src)
     if dmg then
-        npcNotify("Damage: " .. tostring(dmg) .. " (stat: " .. tostring(src) .. ")")
+        npcNotify("Damage: " .. tostring(dmg) .. " (stat: " .. tostring(src.key) .. ")")
     else
         dmg = 1
         npcNotify("Stat damage tidak ketemu, pakai damage 1")
     end
 
+    local lastDmg, lastFind, lastHit = 0, os.clock(), 0
+
     while CONFIG.ENABLED and CONFIG.NPC_KA and npcId == id do
-        if os.clock() - lastScan > 1 then
-            lastScan = os.clock()
-            pcall(npcScan)
-        end
-        if os.clock() - lastDmg > 0.5 then
-            lastDmg = os.clock()
-            local ok, d = pcall(npcGetDamage)
-            if ok and d then dmg = d end
+        local now = os.clock()
+
+        if now - lastDmg > 0.5 then
+            lastDmg = now
+            local d = npcReadDamage(src)
+            if d then
+                dmg = d
+            elseif now - lastFind > 5 then
+                lastFind = now
+                src = npcFindDamageSource()
+                local d2 = npcReadDamage(src)
+                if d2 then dmg = d2 end
+            end
         end
 
         local char = LocalPlayer.Character
         local myRoot = char and char:FindFirstChild("HumanoidRootPart")
-        local ev = getCombatEvent()
-
         pcall(npcRingUpdate, myRoot)
 
-        if myRoot and ev then
-            local list = {}
-            for m in pairs(npcCandidates) do
-                local ok, pos = pcall(function() return m:GetPivot().Position end)
-                if ok and pos and npcAlive(m) then
-                    local dist = (pos - myRoot.Position).Magnitude
-                    if dist <= CONFIG.NPC_KA_RANGE then
-                        list[#list + 1] = { inst = m, dist = dist }
+        if myRoot and now - lastHit >= CONFIG.NPC_KA_DELAY / 1000 then
+            lastHit = now
+            local ev = getCombatEvent()
+            if ev then
+                local myPos = myRoot.Position
+                local range = CONFIG.NPC_KA_RANGE
+                local list = {}
+                for m, part in pairs(npcCandidates) do
+                    local dist = (part.Position - myPos).Magnitude
+                    if dist <= range then
+                        local hum = m:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health <= 0 then
+                            npcCandidates[m] = nil
+                        else
+                            list[#list + 1] = { inst = m, dist = dist }
+                        end
                     end
                 end
-            end
-            table.sort(list, function(a, b) return a.dist < b.dist end)
+                table.sort(list, function(a, b) return a.dist < b.dist end)
 
-            for i = 1, math.min(#list, CONFIG.NPC_KA_MAX) do
-                local target = list[i].inst
-                pcall(function() ev:FireServer(target, dmg) end)
+                for i = 1, math.min(#list, CONFIG.NPC_KA_MAX) do
+                    ev:FireServer(list[i].inst, dmg)
+                end
             end
         end
 
-        task.wait() -- delay 0 (setiap frame)
+        task.wait()
     end
 end
 
@@ -1573,6 +2049,7 @@ local KillAuraTab = createTab("KillAura")
 addToggle(KillAuraTab, "Kill Aura", CONFIG.KA_ENABLED, function(v) setKillAura(v) end)
 addToggle(KillAuraTab, "Kill Aura NPC", CONFIG.NPC_KA, setKillAuraNpc)
 addStepper(KillAuraTab, "NPC Range", 20, 500, 20, CONFIG.NPC_KA_RANGE, function(v) CONFIG.NPC_KA_RANGE = v end)
+addStepper(KillAuraTab, "NPC Hit Delay (ms)", 0, 500, 10, CONFIG.NPC_KA_DELAY, function(v) CONFIG.NPC_KA_DELAY = v end)
 
 selectTab("Farm")
 
