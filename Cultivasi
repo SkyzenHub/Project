@@ -1,0 +1,2322 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
+local VIM = game:GetService("VirtualInputManager")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+------------------------------------------------------------
+-- SETTINGS
+------------------------------------------------------------
+local TITLE = "SKYZENHUB - Herb v21"
+local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
+local LOGO_URL = PHOTO_URL
+local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
+local LOAD_TIME = 10
+
+-- Auto Executor: nama file script di folder workspace executor
+-- (dipakai kalau kolom "Script URL / File" di tab Misc dikosongkan)
+local SCRIPT_FILE = "SkyZenHub_Herb.lua"
+-- Nama file penyimpanan pengaturan
+local SAVE_FILE = "SkyZenHub_Herb_Config.json"
+
+local function notify(title, text)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 4,
+        })
+    end)
+end
+
+local CONFIG = {
+    ENABLED = true,
+    FARM = false,
+    TWEEN_FARM = false,
+    TWEEN_SPEED = 150,
+    SCAN_DELAY = 100,
+    PURGE = false,
+    TIER_ON = { [1000] = true, [100] = true, [10] = true, [1] = true },
+    PROMPT_UP = 100,
+    ANTI_AFK = true,
+    BREW_AUTO = false,
+    ORB_AUTO = false,
+    ESP_CHEST = false,
+    NPC_KA = false,
+    NPC_KA_RANGE = 100,
+    NPC_KA_MAX = 3,
+    NPC_KA_DELAY = 50,
+    ESP_HERB = false,
+    ESP_PLAYERS = false,
+    BREAKTHROUGH = false,
+    BT_INTERVAL = 3,
+    BT_DELAY = 3,
+    KA_ENABLED = false,
+    KA_RANGE = 150,
+    KA_DAMAGE = 500,
+    KA_FIRE_RATE = 50,
+    KA_SPEED_MULT = 5,
+    KA_INSTANT = true,
+    KA_MAX_PER_FRAME = 8,
+    KA_WHITELIST_FRIENDS = true,
+    MG_TAP = false, -- Auto Minigame Breakthrough (tap cincin emas)
+    AUTO_EXEC = false,
+    AUTO_SAVE = true,
+    SCRIPT_SRC = "",
+}
+
+------------------------------------------------------------
+-- SAVE / LOAD CONFIG
+------------------------------------------------------------
+local SAVE_KEYS = {
+    "FARM", "TWEEN_FARM", "TWEEN_SPEED", "SCAN_DELAY", "PURGE", "PROMPT_UP",
+    "ANTI_AFK", "BREW_AUTO", "ORB_AUTO", "ESP_CHEST", "NPC_KA", "NPC_KA_RANGE",
+    "NPC_KA_DELAY", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "BT_INTERVAL",
+    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC",
+}
+
+local function saveConfig()
+    if not writefile then return false end
+    local data = { TIER_ON = {} }
+    for _, k in ipairs(SAVE_KEYS) do
+        data[k] = CONFIG[k]
+    end
+    for t, v in pairs(CONFIG.TIER_ON) do
+        data.TIER_ON[tostring(t)] = v
+    end
+    local ok = pcall(function()
+        writefile(SAVE_FILE, HttpService:JSONEncode(data))
+    end)
+    return ok
+end
+
+local function loadConfig()
+    if not (isfile and readfile) then return false end
+    local ok, data = pcall(function()
+        if isfile(SAVE_FILE) then
+            return HttpService:JSONDecode(readfile(SAVE_FILE))
+        end
+    end)
+    if not ok or type(data) ~= "table" then return false end
+    for _, k in ipairs(SAVE_KEYS) do
+        if data[k] ~= nil and type(data[k]) == type(CONFIG[k]) then
+            CONFIG[k] = data[k]
+        end
+    end
+    if type(data.TIER_ON) == "table" then
+        for t in pairs(CONFIG.TIER_ON) do
+            local v = data.TIER_ON[tostring(t)]
+            if type(v) == "boolean" then CONFIG.TIER_ON[t] = v end
+        end
+    end
+    return true
+end
+
+loadConfig()
+
+-- Kalau script ini dijalankan otomatis oleh Auto Executor tetapi
+-- Auto Executor sudah dimatikan, script berhenti di sini.
+local genv = (getgenv and getgenv()) or _G
+if genv.SkyZenQueuedRun then
+    genv.SkyZenQueuedRun = nil
+    if not CONFIG.AUTO_EXEC then
+        do return end
+    end
+end
+
+local TIERS = { 1000, 100, 10, 1 }
+
+local function activeTiers()
+    local list = {}
+    for _, tier in ipairs(TIERS) do
+        if CONFIG.TIER_ON[tier] then list[#list + 1] = tier end
+    end
+    return list
+end
+
+local READY = false
+local farmId = 0
+
+local hooked = {}
+local function hookPrompt(obj)
+    if obj:IsA("ProximityPrompt") and obj.Name == "CollectHerbPrompt" then
+        obj.HoldDuration = 0
+        obj.RequiresLineOfSight = false
+    end
+end
+
+local function hookSpots(spots)
+    if hooked[spots] then return end
+    hooked[spots] = true
+    for _, d in ipairs(spots:GetDescendants()) do hookPrompt(d) end
+    spots.DescendantAdded:Connect(hookPrompt)
+end
+
+local function applyPromptUi(obj)
+    if obj:IsA("ProximityPrompt") and obj.Name == "CollectHerbPrompt" then
+        obj.UIOffset = Vector2.new(0, -CONFIG.PROMPT_UP)
+    end
+end
+
+local function refreshPromptUi()
+    local spots = workspace:FindFirstChild("HerbSpots")
+    if not spots then return end
+    for _, d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
+end
+
+local function setupPromptUi()
+    task.spawn(function()
+        local spots = workspace:WaitForChild("HerbSpots", 15)
+        if not spots then return end
+        hookSpots(spots)
+        for _, d in ipairs(spots:GetDescendants()) do applyPromptUi(d) end
+        spots.DescendantAdded:Connect(applyPromptUi)
+    end)
+end
+
+local function purgeMap(spots)
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj ~= spots
+            and obj ~= workspace.CurrentCamera
+            and obj.Name ~= "Terrain"
+            and not Players:GetPlayerFromCharacter(obj)
+            and (obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("Folder")) then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+end
+
+local function getPos(obj)
+    if obj:IsA("Model") then return obj:GetPivot().Position end
+    if obj:IsA("BasePart") then return obj.Position end
+end
+
+local function findNearTarget(spots, hrp)
+    for _, tier in ipairs(activeTiers()) do
+        for _, spot in ipairs(spots:GetChildren()) do
+            if spot.Parent and spot:GetAttribute("HerbYear") == tier then
+                local prompt = spot:FindFirstChild("CollectHerbPrompt", true)
+                local pos = getPos(spot)
+                if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos
+                    and (pos - hrp.Position).Magnitude <= prompt.MaxActivationDistance + 2 then
+                    return spot, prompt, tier
+                end
+            end
+        end
+    end
+end
+
+local function farmLoop(id)
+    local purged = false
+    while CONFIG.ENABLED and CONFIG.FARM and farmId == id do
+        local spots = workspace:FindFirstChild("HerbSpots")
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+        if not (spots and hrp) then
+            task.wait(1)
+        else
+            hookSpots(spots)
+            if CONFIG.PURGE and not purged then
+                purged = true
+                purgeMap(spots)
+            end
+
+            local spot, prompt = findNearTarget(spots, hrp)
+            if spot then
+                pcall(function() fireproximityprompt(prompt) end)
+                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                task.wait(0.02)
+                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                task.wait(0.1)
+            else
+                task.wait(CONFIG.SCAN_DELAY / 1000)
+            end
+        end
+    end
+end
+
+local function setFarm(v)
+    CONFIG.FARM = v
+    farmId = farmId + 1
+    if v then
+        task.spawn(farmLoop, farmId)
+    end
+end
+
+local tweenId = 0
+local skipUntil = {}
+
+local swordFlightEvent = nil
+local function getSwordFlight()
+    if swordFlightEvent and swordFlightEvent.Parent then return swordFlightEvent end
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    swordFlightEvent = folder and folder:FindFirstChild("SwordFlight")
+    return swordFlightEvent
+end
+
+local function moveTo(hrp, pos, id)
+    local cf = CFrame.new(pos + Vector3.new(0, 3, 0))
+    local dist = (hrp.Position - cf.Position).Magnitude
+    if dist < 5 then
+        hrp.CFrame = cf
+        return true
+    end
+
+    local t = math.max(dist / CONFIG.TWEEN_SPEED, 0.02)
+    local tw = TS:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {CFrame = cf})
+    local done = false
+    local conn = tw.Completed:Connect(function() done = true end)
+    tw:Play()
+
+    while not done and CONFIG.TWEEN_FARM and tweenId == id do
+        task.wait(0.01)
+    end
+    conn:Disconnect()
+
+    if not done then
+        tw:Cancel()
+        return false
+    end
+    hrp.CFrame = cf
+    return true
+end
+
+local function findTweenTarget(spots)
+    for _, tier in ipairs(activeTiers()) do
+        for _, spot in ipairs(spots:GetChildren()) do
+            if spot.Parent and spot:GetAttribute("HerbYear") == tier
+                and not (skipUntil[spot] and skipUntil[spot] > os.clock()) then
+                local prompt = spot:FindFirstChild("CollectHerbPrompt", true)
+                local pos = getPos(spot)
+                if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and pos then
+                    return spot, prompt, pos, tier
+                end
+            end
+        end
+    end
+end
+
+local function tweenLoop(id)
+    local purged = false
+    while CONFIG.ENABLED and CONFIG.TWEEN_FARM and tweenId == id do
+        local spots = workspace:FindFirstChild("HerbSpots")
+        if not spots then
+            task.wait(1)
+        else
+            hookSpots(spots)
+            if CONFIG.PURGE and not purged then
+                purged = true
+                purgeMap(spots)
+            end
+
+            local spot, prompt, pos = findTweenTarget(spots)
+            if spot then
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    if moveTo(hrp, pos, id) and CONFIG.TWEEN_FARM and tweenId == id then
+                        task.wait(0.2)
+
+                        local collected = false
+                        for _ = 1, 4 do
+                            if not (CONFIG.TWEEN_FARM and tweenId == id) then break end
+                            if not (spot.Parent and prompt.Parent and prompt.Enabled) then
+                                collected = true
+                                break
+                            end
+                            pcall(function() fireproximityprompt(prompt) end)
+                            VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                            task.wait(0.02)
+                            VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                            pcall(function()
+                                prompt:InputHoldBegin()
+                                task.wait(0.05)
+                                prompt:InputHoldEnd()
+                            end)
+                            task.wait(0.25)
+                        end
+
+                        if not collected and CONFIG.TWEEN_FARM and tweenId == id
+                            and spot.Parent and prompt.Parent and prompt.Enabled then
+                            skipUntil[spot] = os.clock() + 5
+                        end
+                    end
+                else
+                    task.wait(0.5)
+                end
+            else
+                task.wait(CONFIG.SCAN_DELAY / 1000)
+            end
+        end
+    end
+end
+
+local function setTweenFarm(v)
+    CONFIG.TWEEN_FARM = v
+    tweenId = tweenId + 1
+
+    local sf = getSwordFlight()
+    if sf then
+        pcall(function() sf:FireServer(v) end)
+    end
+
+    if v then
+        task.spawn(tweenLoop, tweenId)
+    end
+end
+
+-- ESP Herb
+local espHerbs = {}
+local espLoopId = 0
+local TIER_COLORS = {
+    [1000] = Color3.fromRGB(255, 215, 0),
+    [100] = Color3.fromRGB(180, 90, 255),
+    [10] = Color3.fromRGB(80, 160, 255),
+    [1] = Color3.fromRGB(90, 255, 120),
+}
+
+local function clearEspHerbs()
+    for _, d in pairs(espHerbs) do
+        pcall(function() d.bb:Destroy() end)
+    end
+    espHerbs = {}
+end
+
+local function addHerbEsp(spot, tier)
+    local adornee = spot:IsA("BasePart") and spot or spot:FindFirstChildWhichIsA("BasePart", true)
+    if not adornee then return end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "HerbESP"
+    bb.Size = UDim2.new(0, 160, 0, 24)
+    bb.AlwaysOnTop = true
+    bb.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+    bb.Adornee = adornee
+    bb.Parent = adornee
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    label.TextColor3 = TIER_COLORS[tier] or Color3.new(1, 1, 1)
+    label.TextStrokeTransparency = 0
+    label.Text = "Tier " .. tostring(tier)
+    label.Parent = bb
+
+    espHerbs[spot] = { bb = bb, label = label }
+end
+
+local function setEspHerb(v)
+    CONFIG.ESP_HERB = v
+    espLoopId = espLoopId + 1
+    clearEspHerbs()
+    if not v then return end
+
+    local id = espLoopId
+    task.spawn(function()
+        while CONFIG.ENABLED and CONFIG.ESP_HERB and espLoopId == id do
+            local spots = workspace:FindFirstChild("HerbSpots")
+            if spots then
+                local char = LocalPlayer.Character
+                local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+                local seen = {}
+
+                for _, spot in ipairs(spots:GetChildren()) do
+                    local tier = spot:GetAttribute("HerbYear")
+                    local prompt = tier and spot:FindFirstChild("CollectHerbPrompt", true)
+                    if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                        seen[spot] = true
+                        local d = espHerbs[spot]
+                        if not d or not d.bb.Parent then
+                            addHerbEsp(spot, tier)
+                            d = espHerbs[spot]
+                        end
+                        if d then
+                            local text = "Tier " .. tostring(tier)
+                            local pos = getPos(spot)
+                            if myRoot and pos then
+                                text = text .. " | " .. math.floor((pos - myRoot.Position).Magnitude) .. "m"
+                            end
+                            d.label.Text = text
+                        end
+                    end
+                end
+
+                local stale = {}
+                for spot in pairs(espHerbs) do
+                    if not seen[spot] then stale[#stale + 1] = spot end
+                end
+                for _, spot in ipairs(stale) do
+                    pcall(function() espHerbs[spot].bb:Destroy() end)
+                    espHerbs[spot] = nil
+                end
+            end
+            task.wait(0.3)
+        end
+        if espLoopId == id then clearEspHerbs() end
+    end)
+end
+
+-- ESP Player
+local espPlayers = {}
+local espPlayerLoop = nil
+local PLAYER_ESP_COLOR = Color3.fromRGB(64, 224, 255)
+
+local function removePlayerEsp(plr)
+    local d = espPlayers[plr]
+    if d then
+        pcall(function() d.hl:Destroy() end)
+        pcall(function() d.bb:Destroy() end)
+        espPlayers[plr] = nil
+    end
+end
+
+local function getEspRoot(char)
+    return char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart or char:FindFirstChild("Head")
+end
+
+local function buildPlayerEsp(plr, char, root)
+    local hl = Instance.new("Highlight")
+    hl.Adornee = char
+    hl.FillColor = PLAYER_ESP_COLOR
+    hl.FillTransparency = 0.8
+    hl.OutlineColor = PLAYER_ESP_COLOR
+    hl.OutlineTransparency = 0.1
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = char
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 200, 0, 24)
+    bb.Adornee = root
+    bb.AlwaysOnTop = true
+    bb.StudsOffsetWorldSpace = Vector3.new(0, 4, 0)
+    bb.Parent = char
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    label.TextColor3 = PLAYER_ESP_COLOR
+    label.TextStrokeTransparency = 0
+    label.Text = plr.Name
+    label.Parent = bb
+
+    local d = { hl = hl, bb = bb, label = label, char = char }
+    espPlayers[plr] = d
+    return d
+end
+
+local function setEspPlayers(v)
+    CONFIG.ESP_PLAYERS = v
+    if espPlayerLoop then
+        espPlayerLoop:Disconnect()
+        espPlayerLoop = nil
+    end
+    local list = {}
+    for plr in pairs(espPlayers) do list[#list + 1] = plr end
+    for _, plr in ipairs(list) do removePlayerEsp(plr) end
+
+    if not v then return end
+
+    local acc = 0
+    espPlayerLoop = RunService.Heartbeat:Connect(function(dt)
+        acc = acc + dt
+        if acc < 0.3 then return end
+        acc = 0
+
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        local present = {}
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then
+                present[plr] = true
+                local char = plr.Character
+                local root = char and getEspRoot(char)
+                local d = espPlayers[plr]
+                if root then
+                    if not d or d.char ~= char or not d.hl.Parent or not d.bb.Parent then
+                        removePlayerEsp(plr)
+                        d = buildPlayerEsp(plr, char, root)
+                    end
+                    if myRoot then
+                        d.label.Text = plr.Name .. " | " .. math.floor((root.Position - myRoot.Position).Magnitude) .. "m"
+                    else
+                        d.label.Text = plr.Name
+                    end
+                elseif d then
+                    removePlayerEsp(plr)
+                end
+            end
+        end
+
+        local gone = {}
+        for plr in pairs(espPlayers) do
+            if not present[plr] then gone[#gone + 1] = plr end
+        end
+        for _, plr in ipairs(gone) do removePlayerEsp(plr) end
+    end)
+end
+
+-- Cultivation
+local function getCultivationEvent(name)
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild(name)
+end
+
+local btId = 0
+local btConn = nil
+local miniSeen = false
+
+local function sendBreakthroughResult()
+    local ev = getCultivationEvent("BreakthroughMinigameResult")
+    if ev then pcall(function() ev:FireServer(true) end) end
+end
+
+local function setBreakthrough(v)
+    CONFIG.BREAKTHROUGH = v
+    btId = btId + 1
+    if btConn then
+        btConn:Disconnect()
+        btConn = nil
+    end
+    if not v then return end
+    local id = btId
+
+    local miniEv = getCultivationEvent("StartBreakthroughMinigame")
+    if miniEv then
+        btConn = miniEv.OnClientEvent:Connect(function()
+            miniSeen = true
+            task.spawn(function()
+                task.wait(CONFIG.BT_DELAY)
+                if CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
+                    sendBreakthroughResult()
+                end
+            end)
+        end)
+    end
+
+    task.spawn(function()
+        while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id do
+            miniSeen = false
+            local startEv = getCultivationEvent("Breakthrough")
+            if startEv then pcall(function() startEv:FireServer() end) end
+
+            local waited = 0
+            while not miniSeen and waited < 3 and CONFIG.BREAKTHROUGH and btId == id do
+                task.wait(0.1)
+                waited = waited + 0.1
+            end
+
+            if miniSeen then
+                task.wait(CONFIG.BT_DELAY + 1)
+            elseif CONFIG.BREAKTHROUGH and btId == id then
+                task.wait(CONFIG.BT_DELAY)
+                sendBreakthroughResult()
+            end
+
+            task.wait(CONFIG.BT_INTERVAL)
+        end
+    end)
+end
+
+------------------------------------------------------------
+-- AUTO MINIGAME BREAKTHROUGH (tap cincin emas)
+------------------------------------------------------------
+local mgWatched = setmetatable({}, { __mode = "k" })
+local mgLetterRef = nil
+local mgLastTap = 0
+local mgGuiConns = {}
+
+local function mgVisibleChain(o)
+    local cur = o
+    while cur and cur:IsA("GuiObject") do
+        if not cur.Visible then return false end
+        cur = cur.Parent
+    end
+    local sg = o:FindFirstAncestorOfClass("ScreenGui")
+    return sg == nil or sg.Enabled
+end
+
+-- #F3D27A = R0.95 G0.82 B0.48 -> lolos
+local function mgIsGold(c)
+    return c.R >= 0.88 and c.G >= 0.62 and c.B <= 0.58 and (c.R - c.B) >= 0.30
+end
+
+local function mgDoTap(reason)
+    if not (CONFIG.ENABLED and CONFIG.MG_TAP) then return end
+    local now = os.clock()
+    if now - mgLastTap < 0.25 then return end
+    mgLastTap = now
+
+    local lbl = mgLetterRef
+    if not (lbl and lbl.Parent and mgVisibleChain(lbl)) then return end
+
+    task.spawn(function()
+        local letter = string.upper(string.sub(lbl.Text, 1, 1))
+
+        local tapBtn, cur = nil, lbl
+        for _ = 1, 6 do
+            if cur and cur.Name == "Tap" then tapBtn = cur break end
+            cur = cur and cur.Parent
+        end
+        if not tapBtn and lbl.Parent then
+            local root = lbl.Parent
+            for _ = 1, 4 do
+                local f = root:FindFirstChild("Tap", true)
+                if f then tapBtn = f break end
+                root = root.Parent
+            end
+        end
+
+        if tapBtn and firesignal then
+            for _, sig in ipairs({ "MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up" }) do
+                pcall(function() firesignal(tapBtn[sig]) end)
+            end
+        end
+
+        if VIM then
+            local target = tapBtn or lbl
+            local pos = target.AbsolutePosition + target.AbsoluteSize / 2
+            local sg = target:FindFirstAncestorOfClass("ScreenGui")
+            if sg and not sg.IgnoreGuiInset then
+                pos = pos + game:GetService("GuiService"):GetGuiInset()
+            end
+            local okK, kc = pcall(function() return Enum.KeyCode[letter] end)
+            if okK and kc then
+                pcall(function() VIM:SendKeyEvent(true, kc, false, game) end)
+                task.wait(0.02)
+                pcall(function() VIM:SendKeyEvent(false, kc, false, game) end)
+            end
+            pcall(function() VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0) end)
+            task.wait(0.02)
+            pcall(function() VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0) end)
+        end
+    end)
+end
+
+local function mgAttachColor(obj)
+    local prop
+    if obj:IsA("UIStroke") then
+        prop = "Color"
+        local par = obj.Parent
+        if par and (par.Name == "Letter" or par.Name == "Pattern" or par.Name == "Seal") then
+            return
+        end
+    elseif obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+        prop = "ImageColor3"
+    elseif obj:IsA("GuiObject") then
+        prop = "BackgroundColor3"
+    end
+    if not prop then return end
+
+    local prev = obj[prop]
+    mgGuiConns[#mgGuiConns + 1] = obj:GetPropertyChangedSignal(prop):Connect(function()
+        local new = obj[prop]
+        if CONFIG.MG_TAP and mgIsGold(new) and not mgIsGold(prev) then
+            mgDoTap("cincin emas " .. obj.Name)
+        end
+        prev = new
+    end)
+end
+
+local function mgEvaluateLetter(obj)
+    if not (CONFIG.ENABLED and CONFIG.MG_TAP) then return end
+    if not (obj:IsA("TextLabel") or obj:IsA("TextButton")) then return end
+    if not obj.Text:match("^%s*[%a%d]%s*$") then return end
+    if obj.AbsoluteSize.Y < 20 then return end
+    if not mgVisibleChain(obj) then return end
+
+    mgLetterRef = obj
+
+    local root, p = obj, obj.Parent
+    while p and p:IsA("GuiObject") and p.AbsoluteSize.X <= 450 and p.AbsoluteSize.Y <= 450 do
+        root = p; p = p.Parent
+    end
+    if mgWatched[root] then return end
+    mgWatched[root] = true
+    mgLastTap = 0
+
+    mgAttachColor(root)
+    for _, d in ipairs(root:GetDescendants()) do mgAttachColor(d) end
+    mgGuiConns[#mgGuiConns + 1] = root.DescendantAdded:Connect(function(d)
+        task.defer(function()
+            if CONFIG.ENABLED and CONFIG.MG_TAP then pcall(mgAttachColor, d) end
+        end)
+    end)
+end
+
+local mgGuiWatching = false
+local function mgStartGui()
+    if mgGuiWatching then return end
+    mgGuiWatching = true
+    task.spawn(function()
+        local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
+        if not pg then mgGuiWatching = false return end
+        mgGuiConns[#mgGuiConns + 1] = pg.DescendantAdded:Connect(function(obj)
+            if not (obj:IsA("TextLabel") or obj:IsA("TextButton")) then return end
+            task.delay(0.05, function()
+                if not (CONFIG.ENABLED and CONFIG.MG_TAP) then return end
+                pcall(mgEvaluateLetter, obj)
+            end)
+        end)
+        local n = 0
+        for _, d in ipairs(pg:GetDescendants()) do
+            n = n + 1
+            if n % 300 == 0 then task.wait() end
+            if not (CONFIG.ENABLED and CONFIG.MG_TAP) then return end
+            if d:IsA("TextLabel") or d:IsA("TextButton") then pcall(mgEvaluateLetter, d) end
+        end
+    end)
+end
+
+local function mgStopGui()
+    for _, c in ipairs(mgGuiConns) do pcall(function() c:Disconnect() end) end
+    mgGuiConns = {}
+    mgWatched = setmetatable({}, { __mode = "k" })
+    mgLetterRef = nil
+end
+
+local function mgSetTap(v)
+    CONFIG.MG_TAP = v
+    if v then
+        mgStartGui()
+    else
+        mgGuiWatching = false
+        mgStopGui()
+    end
+end
+
+-- Auto Orb
+local orbId = 0
+local orbConn = nil
+
+local function setAutoOrb(v)
+    CONFIG.ORB_AUTO = v
+    orbId = orbId + 1
+    if orbConn then
+        pcall(function() orbConn:Disconnect() end)
+        orbConn = nil
+    end
+    if not v then return end
+    local id = orbId
+
+    task.spawn(function()
+        local folder = ReplicatedStorage:WaitForChild("CultivationEvents", 10)
+        if not folder or orbId ~= id then return end
+        local spawnOrb = folder:WaitForChild("SpawnCultivationOrb", 5)
+        local clicked = folder:WaitForChild("CultivationOrbClicked", 5)
+        if not (spawnOrb and clicked) or orbId ~= id then return end
+
+        orbConn = spawnOrb.OnClientEvent:Connect(function(oid)
+            if not (CONFIG.ENABLED and CONFIG.ORB_AUTO and orbId == id) then return end
+            if oid == nil then return end
+            pcall(function() clicked:FireServer(oid) end)
+        end)
+    end)
+end
+
+-- Kill Aura (multi-target)
+local function getCombatEvent()
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild("CombatHit")
+end
+
+local kaId = 0
+local kaLastTargets = {}
+
+local function kaGetRoot(plr)
+    local char = plr.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function kaHasForceField(plr)
+    local char = plr.Character
+    if not char then return false end
+    return char:FindFirstChildOfClass("ForceField") ~= nil
+end
+
+local function kaFindTargets()
+    local myRoot = kaGetRoot(LocalPlayer)
+    if not myRoot then return {} end
+    local list = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            if not (CONFIG.KA_WHITELIST_FRIENDS and kaHasForceField(plr)) then
+                local root = kaGetRoot(plr)
+                if root then
+                    local d = (root.Position - myRoot.Position).Magnitude
+                    if d <= CONFIG.KA_RANGE then
+                        list[#list + 1] = { plr = plr, dist = d }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.dist < b.dist end)
+    return list
+end
+
+local function kaFire(target)
+    local ev = getCombatEvent()
+    if ev then
+        pcall(function() ev:FireServer(target, CONFIG.KA_DAMAGE) end)
+    end
+end
+
+local function kaLoop(id)
+    local accum = 0
+    while CONFIG.ENABLED and CONFIG.KA_ENABLED and kaId == id do
+        local targets = kaFindTargets()
+
+        if #targets == 0 then
+            kaLastTargets = {}
+            accum = 0
+            task.wait(0.1)
+        else
+            local effectiveHz = CONFIG.KA_FIRE_RATE * CONFIG.KA_SPEED_MULT
+            local interval = 1 / effectiveHz
+
+            if CONFIG.KA_INSTANT then
+                local seen = {}
+                for _, t in ipairs(targets) do
+                    seen[t.plr] = true
+                    if not kaLastTargets[t.plr] then
+                        kaFire(t.plr)
+                    end
+                end
+                kaLastTargets = seen
+            end
+
+            local dt = task.wait(interval) or interval
+            accum = accum + (dt > 0 and dt or interval)
+
+            if accum >= interval then
+                local pending = math.floor(accum / interval)
+                if pending < 1 then pending = 1 end
+                if pending > CONFIG.KA_MAX_PER_FRAME then pending = CONFIG.KA_MAX_PER_FRAME end
+                accum = accum - (pending * interval)
+
+                for _ = 1, pending do
+                    for _, t in ipairs(targets) do
+                        kaFire(t.plr)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function setKillAura(v)
+    CONFIG.KA_ENABLED = v
+    kaId = kaId + 1
+    kaLastTargets = {}
+    if v then
+        task.spawn(kaLoop, kaId)
+    end
+end
+
+-- ESP Chest
+local chestEsp = {}
+local chestConns = {}
+local chestRunId = 0
+
+local CHEST_TYPES = { "Wooden", "Bronze", "Jade", "Celestial" }
+local CHEST_COLORS = {
+    wooden = Color3.fromRGB(170, 110, 60),
+    bronze = Color3.fromRGB(235, 140, 50),
+    jade = Color3.fromRGB(70, 230, 140),
+    celestial = Color3.fromRGB(120, 200, 255),
+}
+local CHEST_ATTR_KEYS = { "ChestType", "Type", "Rarity", "Tier", "ChestName", "DisplayName" }
+local CHEST_TAKEN_KEYS = { "Collected", "Opened", "Taken", "Claimed", "Looted" }
+
+local function isChestName(name)
+    return string.find(string.lower(name), "chest", 1, true) ~= nil
+end
+
+local function chestType(obj)
+    for _, k in ipairs(CHEST_ATTR_KEYS) do
+        local v = obj:GetAttribute(k)
+        if type(v) == "string" then
+            local lv = string.lower(v)
+            for _, t in ipairs(CHEST_TYPES) do
+                if string.find(lv, string.lower(t), 1, true) then return t end
+            end
+        end
+    end
+    local cur = obj
+    while cur and cur ~= workspace do
+        local ln = string.lower(cur.Name)
+        for _, t in ipairs(CHEST_TYPES) do
+            if string.find(ln, string.lower(t), 1, true) then return t end
+        end
+        cur = cur.Parent
+    end
+    return nil
+end
+
+local function chestDisplayName(obj)
+    local t = chestType(obj)
+    if t then return t .. " Chest", t end
+    local n = obj.Name:gsub("_", " ")
+    n = n:gsub("(%l)(%u)", "%1 %2")
+    return n, nil
+end
+
+local function chestColorOf(typeName)
+    if typeName then
+        return CHEST_COLORS[string.lower(typeName)] or Color3.fromRGB(255, 235, 120)
+    end
+    return Color3.fromRGB(255, 235, 120)
+end
+
+local function chestIsCandidate(obj)
+    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return false end
+    if not isChestName(obj.Name) then return false end
+    if Players:GetPlayerFromCharacter(obj) then return false end
+
+    if obj:IsA("Model") then
+        local ln = string.lower(obj.Name)
+        if string.sub(ln, -1) == "s" and string.sub(ln, -2) ~= "ss" then return false end
+        for _, d in ipairs(obj:GetDescendants()) do
+            if d:IsA("Model") and isChestName(d.Name) then return false end
+        end
+    else
+        local p = obj.Parent
+        if p and p:IsA("Model") and isChestName(p.Name) then return false end
+    end
+    return true
+end
+
+local function chestUnregister(obj)
+    local d = chestEsp[obj]
+    if d then
+        pcall(function() d.bb:Destroy() end)
+        chestEsp[obj] = nil
+    end
+end
+
+local function chestRegister(obj)
+    if chestEsp[obj] then return end
+    if not obj:IsDescendantOf(workspace) then return end
+    if not chestIsCandidate(obj) then return end
+
+    local adornee = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+    if not adornee then return end
+
+    for _, d in pairs(chestEsp) do
+        if d.adornee.Parent and (d.adornee.Position - adornee.Position).Magnitude < 6 then
+            return
+        end
+    end
+
+    local parts, hadVisible = {}, false
+    if obj:IsA("BasePart") then
+        parts[1] = obj
+    else
+        for _, p in ipairs(obj:GetDescendants()) do
+            if p:IsA("BasePart") then
+                parts[#parts + 1] = p
+                if #parts >= 40 then break end
+            end
+        end
+    end
+    for _, p in ipairs(parts) do
+        if p.Transparency < 0.9 then hadVisible = true break end
+    end
+
+    local name, tname = chestDisplayName(obj)
+    local color = chestColorOf(tname)
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ChestESP"
+    bb.Size = UDim2.new(0, 190, 0, 24)
+    bb.AlwaysOnTop = true
+    bb.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
+    bb.Adornee = adornee
+    bb.Parent = adornee
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    label.TextColor3 = color
+    label.TextStrokeTransparency = 0
+    label.Text = name
+    label.Parent = bb
+
+    chestEsp[obj] = {
+        obj = obj,
+        bb = bb,
+        label = label,
+        adornee = adornee,
+        name = name,
+        parts = parts,
+        hadVisible = hadVisible,
+        prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true),
+    }
+end
+
+local function chestTaken(d)
+    local obj = d.obj
+    if not obj.Parent or not d.adornee.Parent then return true end
+    if not obj:IsDescendantOf(workspace) then return true end
+    for _, k in ipairs(CHEST_TAKEN_KEYS) do
+        if obj:GetAttribute(k) == true then return true end
+    end
+    if d.prompt and (not d.prompt.Parent or not d.prompt.Enabled) then return true end
+    if d.hadVisible then
+        local anyVisible = false
+        for _, p in ipairs(d.parts) do
+            if p.Parent and p.Transparency < 0.95 then anyVisible = true break end
+        end
+        if not anyVisible then return true end
+    end
+    return false
+end
+
+local function chestTick()
+    local char = LocalPlayer.Character
+    local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+    local gone = {}
+    for obj, d in pairs(chestEsp) do
+        if chestTaken(d) then
+            gone[#gone + 1] = obj
+        else
+            local text = d.name
+            if myRoot then
+                text = text .. " | " .. math.floor((d.adornee.Position - myRoot.Position).Magnitude) .. "m"
+            end
+            d.label.Text = text
+        end
+    end
+    for _, obj in ipairs(gone) do chestUnregister(obj) end
+end
+
+local function chestFullScan(id)
+    local n = 0
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        n = n + 1
+        if n % 400 == 0 then
+            task.wait()
+            if chestRunId ~= id then return end
+        end
+        if (obj:IsA("Model") or obj:IsA("BasePart")) and isChestName(obj.Name) then
+            chestRegister(obj)
+        end
+    end
+end
+
+local function clearChestEsp()
+    for _, c in ipairs(chestConns) do pcall(function() c:Disconnect() end) end
+    chestConns = {}
+    for obj in pairs(chestEsp) do chestUnregister(obj) end
+    chestEsp = {}
+end
+
+local function setEspChest(v)
+    CONFIG.ESP_CHEST = v
+    chestRunId = chestRunId + 1
+    clearChestEsp()
+    if not v then return end
+
+    local id = chestRunId
+
+    chestConns[#chestConns + 1] = workspace.DescendantAdded:Connect(function(obj)
+        if (obj:IsA("Model") or obj:IsA("BasePart")) and isChestName(obj.Name) then
+            task.defer(function()
+                if chestRunId == id then chestRegister(obj) end
+            end)
+        end
+    end)
+    chestConns[#chestConns + 1] = workspace.DescendantRemoving:Connect(function(obj)
+        if chestEsp[obj] then chestUnregister(obj) end
+    end)
+
+    task.spawn(function()
+        local folder = ReplicatedStorage:WaitForChild("CultivationEvents", 10)
+        local ev = folder and folder:WaitForChild("ChestSync", 5)
+        if ev and chestRunId == id then
+            chestConns[#chestConns + 1] = ev.OnClientEvent:Connect(function()
+                task.defer(function()
+                    if chestRunId == id then chestTick() end
+                end)
+            end)
+        end
+    end)
+
+    task.spawn(function()
+        chestFullScan(id)
+        local lastScan = os.clock()
+        while CONFIG.ENABLED and CONFIG.ESP_CHEST and chestRunId == id do
+            chestTick()
+            if os.clock() - lastScan > 8 then
+                lastScan = os.clock()
+                chestFullScan(id)
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+
+-- Kill Aura NPC
+local npcId = 0
+local npcCandidates = {}
+
+local function npcIsCandidate(m)
+    if not m:IsA("Model") then return false end
+    if Players:GetPlayerFromCharacter(m) then return false end
+    if m:FindFirstChildOfClass("Humanoid") then return true end
+    return string.find(m.Name, "Disciple", 1, true) ~= nil
+end
+
+local function npcRootOf(m)
+    return m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+end
+
+local function npcScan(id)
+    local found = {}
+    local n = 0
+    local function add(m)
+        if not found[m] then
+            local r = npcRootOf(m)
+            if r then found[m] = r end
+        end
+    end
+
+    for _, d in ipairs(workspace:GetDescendants()) do
+        n = n + 1
+        if n % 400 == 0 then
+            task.wait()
+            if npcId ~= id then return end
+        end
+        if d:IsA("Humanoid") then
+            local m = d.Parent
+            if m and npcIsCandidate(m) then add(m) end
+        elseif d:IsA("Model") and string.find(d.Name, "Disciple", 1, true) and npcIsCandidate(d) then
+            add(d)
+        end
+    end
+
+    if getnilinstances then
+        local ok, nils = pcall(getnilinstances)
+        if ok and nils then
+            for _, o in ipairs(nils) do
+                n = n + 1
+                if n % 400 == 0 then
+                    task.wait()
+                    if npcId ~= id then return end
+                end
+                if o:IsA("Model") and npcIsCandidate(o) then add(o) end
+            end
+        end
+    end
+
+    npcCandidates = found
+end
+
+local function npcScanLoop(id)
+    while CONFIG.ENABLED and CONFIG.NPC_KA and npcId == id do
+        pcall(npcScan, id)
+        task.wait(3)
+    end
+end
+
+local DAMAGE_KEYS = { "damage", "attack", "atk", "dmg", "power", "strength" }
+local DAMAGE_SKIP = { "speed", "cooldown", "rate", "chance", "crit", "range", "multi", "boost" }
+
+local function damagePriority(name)
+    local n = string.lower(name)
+    for _, bad in ipairs(DAMAGE_SKIP) do
+        if string.find(n, bad, 1, true) then return nil end
+    end
+    for i, key in ipairs(DAMAGE_KEYS) do
+        if string.find(n, key, 1, true) then return i end
+    end
+    return nil
+end
+
+local function npcFindDamageSource()
+    local best, bestP = nil, 99
+    local holders = { LocalPlayer, LocalPlayer.Character }
+    for _, h in ipairs(holders) do
+        if h then
+            for k, val in pairs(h:GetAttributes()) do
+                if type(val) == "number" and val > 0 then
+                    local p = damagePriority(k)
+                    if p and p < bestP then
+                        best, bestP = { kind = "attr", holder = h, key = k }, p
+                    end
+                end
+            end
+            for _, d in ipairs(h:GetDescendants()) do
+                if (d:IsA("NumberValue") or d:IsA("IntValue")) and d.Value > 0 then
+                    local p = damagePriority(d.Name)
+                    if p and p < bestP then
+                        best, bestP = { kind = "value", obj = d, key = d.Name }, p
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function npcReadDamage(src)
+    if not src then return nil end
+    local v
+    if src.kind == "attr" then
+        if not src.holder.Parent then return nil end
+        v = src.holder:GetAttribute(src.key)
+    else
+        if not src.obj.Parent then return nil end
+        v = src.obj.Value
+    end
+    if type(v) == "number" and v > 0 then return v end
+    return nil
+end
+
+local npcRing = nil
+local npcRingRadius = -1
+
+local function npcRingDestroy()
+    if npcRing then
+        pcall(function() npcRing:Destroy() end)
+        npcRing = nil
+    end
+    npcRingRadius = -1
+end
+
+local function npcRingUpdate(myRoot)
+    if not myRoot then
+        if npcRing and npcRing.Adornee then npcRing.Adornee = nil end
+        return
+    end
+    if not npcRing or not npcRing.Parent then
+        local ring = Instance.new("CylinderHandleAdornment")
+        ring.Name = "NpcKaRing"
+        ring.Height = 0.15
+        ring.Color3 = Color3.fromRGB(255, 60, 60)
+        ring.Transparency = 0.25
+        ring.AlwaysOnTop = true
+        ring.ZIndex = 1
+        ring.CFrame = CFrame.new(0, -2.9, 0) * CFrame.Angles(math.rad(90), 0, 0)
+        ring.Adornee = myRoot
+        ring.Parent = workspace.CurrentCamera
+        npcRing = ring
+        npcRingRadius = -1
+    end
+    if npcRing.Adornee ~= myRoot then npcRing.Adornee = myRoot end
+    local r = CONFIG.NPC_KA_RANGE
+    if r ~= npcRingRadius then
+        npcRingRadius = r
+        npcRing.Radius = r
+        npcRing.InnerRadius = math.max(r - 0.6, 0)
+    end
+end
+
+local function npcNotify(text)
+    notify("Kill Aura NPC", text)
+end
+
+local function npcLoop(id)
+    task.spawn(npcScanLoop, id)
+
+    local src = npcFindDamageSource()
+    local dmg = npcReadDamage(src)
+    if dmg then
+        npcNotify("Damage: " .. tostring(dmg) .. " (stat: " .. tostring(src.key) .. ")")
+    else
+        dmg = 1
+        npcNotify("Stat damage tidak ketemu, pakai damage 1")
+    end
+
+    local lastDmg, lastFind, lastHit = 0, os.clock(), 0
+
+    while CONFIG.ENABLED and CONFIG.NPC_KA and npcId == id do
+        local now = os.clock()
+
+        if now - lastDmg > 0.5 then
+            lastDmg = now
+            local d = npcReadDamage(src)
+            if d then
+                dmg = d
+            elseif now - lastFind > 5 then
+                lastFind = now
+                src = npcFindDamageSource()
+                local d2 = npcReadDamage(src)
+                if d2 then dmg = d2 end
+            end
+        end
+
+        local char = LocalPlayer.Character
+        local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+        pcall(npcRingUpdate, myRoot)
+
+        if myRoot and now - lastHit >= CONFIG.NPC_KA_DELAY / 1000 then
+            lastHit = now
+            local ev = getCombatEvent()
+            if ev then
+                local myPos = myRoot.Position
+                local range = CONFIG.NPC_KA_RANGE
+                local list = {}
+                for m, part in pairs(npcCandidates) do
+                    local dist = (part.Position - myPos).Magnitude
+                    if dist <= range then
+                        local hum = m:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health <= 0 then
+                            npcCandidates[m] = nil
+                        else
+                            list[#list + 1] = { inst = m, dist = dist }
+                        end
+                    end
+                end
+                table.sort(list, function(a, b) return a.dist < b.dist end)
+
+                for i = 1, math.min(#list, CONFIG.NPC_KA_MAX) do
+                    ev:FireServer(list[i].inst, dmg)
+                end
+            end
+        end
+
+        task.wait()
+    end
+end
+
+local function setKillAuraNpc(v)
+    CONFIG.NPC_KA = v
+    npcId = npcId + 1
+    if v then
+        task.spawn(npcLoop, npcId)
+    else
+        npcCandidates = {}
+        npcRingDestroy()
+    end
+end
+
+-- Perfect Brew + Auto Claim
+local brewId = 0
+local PERFECT_STOKE = 2.3241790770116495
+
+local function getCauldronStoke()
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild("CauldronStoke")
+end
+
+local function getCauldronClaim()
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    return folder and folder:FindFirstChild("CauldronClaim")
+end
+
+local function perfectBrewOnce()
+    local ev = getCauldronStoke()
+    if ev then
+        pcall(function() ev:FireServer(PERFECT_STOKE) end)
+        return true
+    end
+    return false
+end
+
+local function claimOnce()
+    local ev = getCauldronClaim()
+    if ev then
+        pcall(function() ev:FireServer() end)
+        return true
+    end
+    return false
+end
+
+local function brewLoop(id)
+    while CONFIG.ENABLED and CONFIG.BREW_AUTO and brewId == id do
+        perfectBrewOnce()
+        task.wait(0.05)
+        claimOnce()
+        task.wait(0.5)
+    end
+end
+
+local function setAutoBrew(v)
+    CONFIG.BREW_AUTO = v
+    brewId = brewId + 1
+    if v then
+        task.spawn(brewLoop, brewId)
+    end
+end
+
+------------------------------------------------------------
+-- AUTO EXECUTOR (jalan otomatis setelah pindah server/teleport)
+------------------------------------------------------------
+local execQueued = false
+
+local function getQueueFn()
+    return queue_on_teleport
+        or (syn and syn.queue_on_teleport)
+        or (fluxus and fluxus.queue_on_teleport)
+end
+
+local function buildQueueCode()
+    local src = CONFIG.SCRIPT_SRC
+    local load
+    if src:match("^https?://") then
+        load = string.format("loadstring(game:HttpGet(%q))()", src)
+    else
+        local f = (src ~= "" and src) or SCRIPT_FILE
+        load = string.format("loadstring(readfile(%q))()", f)
+    end
+    return "if not game:IsLoaded() then game.Loaded:Wait() end "
+        .. "task.wait(2) "
+        .. "local g = (getgenv and getgenv()) or _G "
+        .. "g.SkyZenQueuedRun = true "
+        .. load
+end
+
+local function setAutoExec(v)
+    CONFIG.AUTO_EXEC = v
+    if v and not execQueued then
+        local q = getQueueFn()
+        if q then
+            local ok = pcall(q, buildQueueCode())
+            if ok then
+                execQueued = true
+                notify("Auto Executor", "Aktif. Script jalan otomatis setelah teleport.")
+            else
+                notify("Auto Executor", "Gagal mengantri script.")
+            end
+        else
+            notify("Auto Executor", "Executor kamu tidak mendukung queue_on_teleport.")
+        end
+    end
+    saveConfig()
+end
+
+-- Anti AFK
+LocalPlayer.Idled:Connect(function()
+    if READY and CONFIG.ANTI_AFK and CONFIG.ENABLED then
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end
+end)
+
+-- Kalau Auto Executor aktif, antri ulang tiap kali teleport dimulai
+LocalPlayer.OnTeleport:Connect(function(state)
+    if CONFIG.ENABLED and CONFIG.AUTO_EXEC and not execQueued then
+        local q = getQueueFn()
+        if q then
+            pcall(q, buildQueueCode())
+            execQueued = true
+        end
+    end
+end)
+
+-- UI
+local parent = (gethui and gethui()) or game:GetService("CoreGui")
+if parent:FindFirstChild("SkyzenGUI") then parent.SkyzenGUI:Destroy() end
+
+local RED = Color3.fromRGB(0, 0, 0)
+local DARK = Color3.fromRGB(10, 10, 14)
+local GREY = Color3.fromRGB(60, 60, 70)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SkyzenGUI"
+gui.ResetOnSpawn = false
+gui.Parent = parent
+
+local function isImage(data)
+    if type(data) ~= "string" or #data < 100 then return false end
+    local h = data:sub(1, 4)
+    return h == "\137PNG" or h:sub(1, 2) == "\255\216" or h == "RIFF"
+end
+
+local function loadImage(url, fname)
+    if url == "" then return nil, "empty URL" end
+    if not writefile then return nil, "no writefile" end
+    local getAsset = getcustomasset or getsynasset
+    if not getAsset then return nil, "no getcustomasset" end
+
+    local data
+    local req = (syn and syn.request) or request or http_request
+    if req then
+        local ok, res = pcall(function() return req({Url = url, Method = "GET"}) end)
+        if ok and res and isImage(res.Body) then data = res.Body end
+    end
+    if not data then
+        local ok, r = pcall(function() return game:HttpGet(url) end)
+        if ok and isImage(r) then data = r end
+    end
+    if not data then return nil, "download failed" end
+
+    local ok3, err3 = pcall(writefile, fname, data)
+    if not ok3 then return nil, "writefile failed: " .. tostring(err3) end
+    local ok4, id = pcall(getAsset, fname)
+    if not ok4 or not id then return nil, "getcustomasset failed" end
+    return id
+end
+
+local photoId, photoErr = loadImage(PHOTO_URL, "skyzenhub_bg.png")
+if not photoId then print("[SkyZenHub] Photo failed: " .. tostring(photoErr)) end
+local logoId = photoId
+if LOGO_URL ~= PHOTO_URL then
+    logoId = loadImage(LOGO_URL, "skyzenhub_logo.png")
+end
+local loadingId = loadImage(LOADING_URL, "skyzenhub_loading.jpg") or photoId
+
+local function makeLogo(obj)
+    obj.BackgroundTransparency = 1
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3 = Color3.new(1, 1, 1)
+    bg.BorderSizePixel = 0
+    bg.ZIndex = 1
+    bg.Parent = obj
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(1, 0)
+    local g = Instance.new("UIGradient", bg)
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, RED),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, RED),
+    })
+    TS:Create(g, TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1), {Rotation = 360}):Play()
+    local st = Instance.new("UIStroke", bg)
+    st.Color = RED
+    st.Thickness = 1.5
+
+    if logoId then
+        local img = Instance.new("ImageLabel")
+        img.Size = UDim2.new(1, -4, 1, -4)
+        img.Position = UDim2.new(0, 2, 0, 2)
+        img.BackgroundTransparency = 1
+        img.Image = logoId
+        img.ScaleType = Enum.ScaleType.Crop
+        img.ZIndex = 2
+        img.Parent = obj
+        Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
+    else
+        local t = Instance.new("TextLabel")
+        t.Size = UDim2.new(1, 0, 1, 0)
+        t.BackgroundTransparency = 1
+        t.Text = "SZ"
+        t.Font = Enum.Font.GothamBlack
+        t.TextScaled = true
+        t.TextColor3 = Color3.new(1, 1, 1)
+        t.ZIndex = 2
+        t.Parent = obj
+        Instance.new("UITextSizeConstraint", t).MaxTextSize = 20
+    end
+end
+
+local loader = Instance.new("CanvasGroup")
+loader.Name = "Loader"
+loader.AnchorPoint = Vector2.new(0.5, 0.5)
+loader.Position = UDim2.new(0.5, 0, 0.5, 0)
+loader.Size = UDim2.new(0, 280, 0, 170)
+loader.BackgroundTransparency = 1
+loader.BorderSizePixel = 0
+loader.Active = false
+loader.ZIndex = 50
+loader.Parent = gui
+
+local lbg = Instance.new("Frame")
+lbg.Size = UDim2.new(1, 0, 1, 0)
+lbg.BackgroundColor3 = Color3.new(1, 1, 1)
+lbg.BorderSizePixel = 0
+lbg.Parent = loader
+Instance.new("UICorner", lbg).CornerRadius = UDim.new(0, 14)
+local lbgGrad = Instance.new("UIGradient", lbg)
+lbgGrad.Rotation = 90
+lbgGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 34)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 6, 10)),
+})
+local lbgStroke = Instance.new("UIStroke", lbg)
+lbgStroke.Color = RED
+lbgStroke.Thickness = 1.5
+TS:Create(lbgStroke, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.7}):Play()
+
+if loadingId then
+    local lImgBg = Instance.new("ImageLabel")
+    lImgBg.Size = UDim2.new(1, 0, 1, 0)
+    lImgBg.BackgroundTransparency = 1
+    lImgBg.Image = loadingId
+    lImgBg.ScaleType = Enum.ScaleType.Crop
+    lImgBg.ImageTransparency = 0.15
+    lImgBg.Parent = lbg
+    Instance.new("UICorner", lImgBg).CornerRadius = UDim.new(0, 14)
+
+    local lShade = Instance.new("Frame")
+    lShade.Size = UDim2.new(1, 0, 1, 0)
+    lShade.BackgroundColor3 = Color3.new(1, 1, 1)
+    lShade.BackgroundTransparency = 0.4
+    lShade.BorderSizePixel = 0
+    lShade.Parent = lbg
+    Instance.new("UICorner", lShade).CornerRadius = UDim.new(0, 14)
+end
+
+local lLogo = Instance.new("Frame")
+lLogo.AnchorPoint = Vector2.new(0.5, 0)
+lLogo.Position = UDim2.new(0.5, 0, 0, 18)
+lLogo.Size = UDim2.new(0, 56, 0, 56)
+lLogo.Parent = loader
+makeLogo(lLogo)
+
+local lTitle = Instance.new("TextLabel")
+lTitle.Position = UDim2.new(0, 0, 0, 82)
+lTitle.Size = UDim2.new(1, 0, 0, 24)
+lTitle.BackgroundTransparency = 1
+lTitle.Text = "SKYZENHUB"
+lTitle.Font = Enum.Font.GothamBlack
+lTitle.TextSize = 16
+lTitle.TextColor3 = Color3.fromRGB(0, 0, 0)
+lTitle.Parent = loader
+
+local lStatus = Instance.new("TextLabel")
+lStatus.Position = UDim2.new(0, 0, 0, 108)
+lStatus.Size = UDim2.new(1, 0, 0, 18)
+lStatus.BackgroundTransparency = 1
+lStatus.Text = "Initializing..."
+lStatus.Font = Enum.Font.GothamBlack
+lStatus.TextSize = 13
+lStatus.TextColor3 = Color3.fromRGB(0, 0, 0)
+lStatus.Parent = loader
+
+local lBar = Instance.new("Frame")
+lBar.AnchorPoint = Vector2.new(0.5, 0)
+lBar.Position = UDim2.new(0.5, 0, 0, 138)
+lBar.Size = UDim2.new(0, 220, 0, 6)
+lBar.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+lBar.BorderSizePixel = 0
+lBar.Parent = loader
+Instance.new("UICorner", lBar).CornerRadius = UDim.new(1, 0)
+
+local lFill = Instance.new("Frame")
+lFill.Size = UDim2.new(0, 0, 1, 0)
+lFill.BackgroundColor3 = RED
+lFill.BorderSizePixel = 0
+lFill.Parent = lBar
+Instance.new("UICorner", lFill).CornerRadius = UDim.new(1, 0)
+
+local function setProgress(p, text, dur)
+    lStatus.Text = text
+    TS:Create(lFill, TweenInfo.new(dur or 0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(p, 0, 1, 0)}):Play()
+end
+
+local loadStart = os.clock()
+setProgress(0.1, "Initializing...", 1.2)
+task.wait(1.5)
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 340, 0, 280)
+main.Position = UDim2.new(0.5, -170, 0.5, -140)
+main.BackgroundColor3 = DARK
+main.ClipsDescendants = true
+main.Visible = false
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+
+local grad = Instance.new("UIGradient", main)
+grad.Rotation = 90
+grad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 34)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 6, 10)),
+})
+
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = RED
+stroke.Thickness = 1.5
+TS:Create(stroke, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.7}):Play()
+
+setProgress(0.3, "Loading assets...", 1)
+
+if photoId then
+    local bgImg = Instance.new("ImageLabel")
+    bgImg.Size = UDim2.new(1, 0, 1, 0)
+    bgImg.BackgroundTransparency = 1
+    bgImg.Image = photoId
+    bgImg.ScaleType = Enum.ScaleType.Crop
+    bgImg.ZIndex = 1
+    bgImg.Parent = main
+    Instance.new("UICorner", bgImg).CornerRadius = UDim.new(0, 12)
+
+    local shade = Instance.new("Frame")
+    shade.Size = UDim2.new(1, 0, 1, 0)
+    shade.BackgroundColor3 = Color3.new(0, 0, 0)
+    shade.BackgroundTransparency = 0.45
+    shade.BorderSizePixel = 0
+    shade.ZIndex = 1
+    shade.Parent = main
+    Instance.new("UICorner", shade).CornerRadius = UDim.new(0, 12)
+end
+
+setProgress(0.5, "Building interface...", 1)
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 42)
+header.BackgroundTransparency = 1
+header.Parent = main
+
+local logo = Instance.new("Frame")
+logo.Size = UDim2.new(0, 30, 0, 30)
+logo.Position = UDim2.new(0, 10, 0, 6)
+logo.Parent = header
+makeLogo(logo)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -130, 1, 0)
+title.Position = UDim2.new(0, 48, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = TITLE
+title.Font = Enum.Font.GothamBlack
+title.TextSize = 13
+title.TextColor3 = Color3.fromRGB(235, 235, 240)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
+
+local function topBtn(text, x)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 28, 0, 24)
+    b.Position = UDim2.new(1, x, 0, 9)
+    b.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Parent = header
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+local minBtn = topBtn("-", -66)
+local closeBtn = topBtn("X", -34)
+
+local line = Instance.new("Frame")
+line.Size = UDim2.new(1, -24, 0, 1)
+line.Position = UDim2.new(0, 12, 0, 44)
+line.BackgroundColor3 = GREY
+line.BorderSizePixel = 0
+line.Parent = main
+
+local tabBar = Instance.new("ScrollingFrame")
+tabBar.Size = UDim2.new(1, -24, 0, 28)
+tabBar.Position = UDim2.new(0, 12, 0, 52)
+tabBar.BackgroundTransparency = 1
+tabBar.BorderSizePixel = 0
+tabBar.ScrollBarThickness = 0
+tabBar.ScrollingDirection = Enum.ScrollingDirection.X
+tabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
+tabBar.AutomaticCanvasSize = Enum.AutomaticSize.X
+tabBar.ScrollBarImageTransparency = 1
+tabBar.ElasticBehavior = Enum.ElasticBehavior.Never
+tabBar.Parent = main
+local tl = Instance.new("UIListLayout", tabBar)
+tl.FillDirection = Enum.FillDirection.Horizontal
+tl.Padding = UDim.new(0, 6)
+tl.SortOrder = Enum.SortOrder.LayoutOrder
+
+local pages = {}
+local tabButtons = {}
+
+local function selectTab(name)
+    for n, page in pairs(pages) do
+        page.Visible = (n == name)
+        tabButtons[n].BackgroundColor3 = (n == name) and RED or Color3.fromRGB(25, 25, 30)
+    end
+end
+
+local function createTab(name)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 70, 1, 0)
+    b.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    b.Text = name
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 11
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Parent = tabBar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    tabButtons[name] = b
+
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.new(1, -24, 1, -92)
+    page.Position = UDim2.new(0, 12, 0, 86)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 3
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.Parent = main
+    local pageLayout = Instance.new("UIListLayout", page)
+    pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    pageLayout.Padding = UDim.new(0, 4)
+    pages[name] = page
+
+    b.MouseButton1Click:Connect(function() selectTab(name) end)
+    return page
+end
+
+local orderCounter = {}
+local function nextOrder(page)
+    orderCounter[page] = (orderCounter[page] or 0) + 1
+    return orderCounter[page]
+end
+
+-- Toggle yang tersimpan sebagai ON akan dihidupkan setelah loading selesai
+local pendingStart = {}
+
+local function addToggle(page, name, default, callback)
+    local state = default
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(55, 55, 64)
+    b.BackgroundTransparency = 0.1
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.fromRGB(220, 220, 225)
+    b.LayoutOrder = nextOrder(page)
+    b.Parent = page
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", b)
+    b.Text = ""
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(0, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    fill.BorderSizePixel = 0
+    fill.Parent = b
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 8)
+
+    local shine = Instance.new("UIGradient", fill)
+    shine.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(95, 95, 105)),
+        ColorSequenceKeypoint.new(0.3, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(0.7, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(95, 95, 105)),
+    })
+    local shimmer = nil
+
+    local txt = Instance.new("TextLabel")
+    txt.Size = UDim2.new(1, 0, 1, 0)
+    txt.BackgroundTransparency = 1
+    txt.Font = Enum.Font.GothamBold
+    txt.TextSize = 13
+    txt.TextColor3 = Color3.new(1, 1, 1)
+    txt.Parent = b
+
+    local function refresh(animate)
+        txt.Text = name .. "  :  " .. (state and "ON" or "OFF")
+        local goalSize = UDim2.new(state and 1 or 0, 0, 1, 0)
+        local goalColor = state and Color3.fromRGB(0, 0, 0) or GREY
+        if animate then
+            TS:Create(fill, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = goalSize}):Play()
+            TS:Create(s, TweenInfo.new(0.35), {Color = goalColor, Thickness = state and 2.5 or 1}):Play()
+        else
+            fill.Size = goalSize
+            s.Color = goalColor
+            s.Thickness = state and 2.5 or 1
+        end
+        if state then
+            if not shimmer then
+                shine.Offset = Vector2.new(-1, 0)
+                shimmer = TS:Create(shine, TweenInfo.new(1.4, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1), {Offset = Vector2.new(1, 0)})
+                shimmer:Play()
+            end
+        elseif shimmer then
+            shimmer:Cancel()
+            shimmer = nil
+        end
+    end
+    refresh(false)
+
+    if default then
+        pendingStart[#pendingStart + 1] = callback
+    end
+
+    b.MouseButton1Click:Connect(function()
+        state = not state
+        refresh(true)
+        pcall(callback, state)
+        if CONFIG.AUTO_SAVE then saveConfig() end
+    end)
+end
+
+local function addStepper(page, name, min, max, step, default, callback)
+    local value = default
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, -6, 0, 34)
+    f.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    f.BackgroundTransparency = 0.25
+    f.LayoutOrder = nextOrder(page)
+    f.Parent = page
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+    local fs = Instance.new("UIStroke", f)
+    fs.Color = GREY
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -90, 1, 0)
+    lbl.Position = UDim2.new(0, 10, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 13
+    lbl.TextColor3 = Color3.fromRGB(220, 220, 225)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = f
+
+    local function render() lbl.Text = name .. "  :  " .. tostring(value) end
+    render()
+
+    local function btn(text, x, delta)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(0, 34, 0, 24)
+        b.Position = UDim2.new(1, x, 0.5, -12)
+        b.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        b.Text = text
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 16
+        b.TextColor3 = Color3.new(1, 1, 1)
+        b.Parent = f
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        b.MouseButton1Click:Connect(function()
+            value = math.clamp(value + delta, min, max)
+            render()
+            pcall(callback, value)
+            if CONFIG.AUTO_SAVE then saveConfig() end
+        end)
+    end
+    btn("-", -80, -step)
+    btn("+", -40, step)
+end
+
+local function addButton(page, name, callback)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    b.BackgroundTransparency = 0.1
+    b.Text = name
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.LayoutOrder = nextOrder(page)
+    b.Parent = page
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    local bst = Instance.new("UIStroke", b)
+    bst.Color = GREY
+    bst.Thickness = 1.5
+    b.MouseButton1Click:Connect(function()
+        pcall(callback)
+    end)
+    return b
+end
+
+local function addTextBox(page, name, default, callback)
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, -6, 0, 54)
+    f.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    f.BackgroundTransparency = 0.25
+    f.LayoutOrder = nextOrder(page)
+    f.Parent = page
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+    local fs = Instance.new("UIStroke", f)
+    fs.Color = GREY
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -20, 0, 18)
+    lbl.Position = UDim2.new(0, 10, 0, 4)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.TextColor3 = Color3.fromRGB(220, 220, 225)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = name
+    lbl.Parent = f
+
+    local tb = Instance.new("TextBox")
+    tb.Size = UDim2.new(1, -20, 0, 26)
+    tb.Position = UDim2.new(0, 10, 0, 24)
+    tb.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+    tb.BackgroundTransparency = 0.15
+    tb.Font = Enum.Font.Gotham
+    tb.TextSize = 12
+    tb.TextColor3 = Color3.new(1, 1, 1)
+    tb.PlaceholderText = SCRIPT_FILE
+    tb.PlaceholderColor3 = Color3.fromRGB(140, 140, 150)
+    tb.ClearTextOnFocus = false
+    tb.TextXAlignment = Enum.TextXAlignment.Left
+    tb.TextTruncate = Enum.TextTruncate.AtEnd
+    tb.Text = default or ""
+    tb.Parent = f
+    Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 6)
+
+    tb.FocusLost:Connect(function()
+        local t = tb.Text:gsub("^%s+", ""):gsub("%s+$", "")
+        pcall(callback, t)
+        if CONFIG.AUTO_SAVE then saveConfig() end
+    end)
+end
+
+local function addSection(page, title, startOpen)
+    local open = startOpen and true or false
+    local header = Instance.new("TextButton")
+    header.Size = UDim2.new(1, -6, 0, 30)
+    header.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    header.BackgroundTransparency = 0.1
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 13
+    header.TextColor3 = Color3.fromRGB(220, 220, 225)
+    header.LayoutOrder = nextOrder(page)
+    header.Parent = page
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 8)
+    local hs = Instance.new("UIStroke", header)
+    hs.Color = GREY
+
+    local body = Instance.new("Frame")
+    body.Size = UDim2.new(1, 0, 0, 0)
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.BackgroundTransparency = 1
+    body.LayoutOrder = nextOrder(page)
+    body.Visible = open
+    body.Parent = page
+    local bodyLayout = Instance.new("UIListLayout", body)
+    bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    bodyLayout.Padding = UDim.new(0, 4)
+
+    local function refresh()
+        header.Text = (open and "▼  " or "▶  ") .. title
+        body.Visible = open
+    end
+    refresh()
+    header.MouseButton1Click:Connect(function()
+        open = not open
+        refresh()
+    end)
+
+    return body
+end
+
+-- Tab Farm
+local FarmTab = createTab("Farm")
+local TierBox = addSection(FarmTab, "Select Tier", false)
+addToggle(TierBox, "Tier 1000", CONFIG.TIER_ON[1000], function(v) CONFIG.TIER_ON[1000] = v end)
+addToggle(TierBox, "Tier 100", CONFIG.TIER_ON[100], function(v) CONFIG.TIER_ON[100] = v end)
+addToggle(TierBox, "Tier 10", CONFIG.TIER_ON[10], function(v) CONFIG.TIER_ON[10] = v end)
+addToggle(TierBox, "Tier 1", CONFIG.TIER_ON[1], function(v) CONFIG.TIER_ON[1] = v end)
+addStepper(FarmTab, "Move Speed", 10, 500, 10, CONFIG.TWEEN_SPEED, function(v) CONFIG.TWEEN_SPEED = v end)
+addStepper(FarmTab, "Search Delay (ms)", 0, 1000, 50, CONFIG.SCAN_DELAY, function(v) CONFIG.SCAN_DELAY = v end)
+addStepper(FarmTab, "Herb Button Up (px)", 0, 300, 20, CONFIG.PROMPT_UP, function(v)
+    CONFIG.PROMPT_UP = v
+    refreshPromptUi()
+end)
+addToggle(FarmTab, "Auto Farm (Tween)", CONFIG.TWEEN_FARM, setTweenFarm)
+addToggle(FarmTab, "Instant Herb", CONFIG.FARM, setFarm)
+addToggle(FarmTab, "Perfect Brew", CONFIG.BREW_AUTO, setAutoBrew)
+addToggle(FarmTab, "Auto Orb", CONFIG.ORB_AUTO, setAutoOrb)
+
+-- Tab ESP
+local EspTab = createTab("ESP")
+addToggle(EspTab, "ESP Herb", CONFIG.ESP_HERB, setEspHerb)
+addToggle(EspTab, "ESP Player", CONFIG.ESP_PLAYERS, setEspPlayers)
+addToggle(EspTab, "ESP Chest", CONFIG.ESP_CHEST, setEspChest)
+
+-- Tab Cultivate
+local CultTab = createTab("Cultivate")
+addToggle(CultTab, "Auto Breakthrough", CONFIG.BREAKTHROUGH, setBreakthrough)
+addToggle(CultTab, "Auto Minigame Breakthrough", CONFIG.MG_TAP, mgSetTap)
+addStepper(CultTab, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
+addStepper(CultTab, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
+
+-- Tab Misc
+local MiscTab = createTab("Misc")
+addToggle(MiscTab, "Anti AFK", CONFIG.ANTI_AFK, function(v) CONFIG.ANTI_AFK = v end)
+addToggle(MiscTab, "Booster FPS", CONFIG.PURGE, function(v) CONFIG.PURGE = v end)
+addToggle(MiscTab, "Auto Executor", CONFIG.AUTO_EXEC, setAutoExec)
+addTextBox(MiscTab, "Script URL / File (Auto Executor)", CONFIG.SCRIPT_SRC, function(t)
+    CONFIG.SCRIPT_SRC = t
+end)
+addToggle(MiscTab, "Auto Save", CONFIG.AUTO_SAVE, function(v)
+    CONFIG.AUTO_SAVE = v
+    saveConfig()
+end)
+addButton(MiscTab, "Save Config", function()
+    if saveConfig() then
+        notify("SkyZenHub", "Pengaturan tersimpan.")
+    else
+        notify("SkyZenHub", "Gagal menyimpan (executor tidak mendukung writefile).")
+    end
+end)
+addButton(MiscTab, "Reset Config", function()
+    if delfile and isfile then
+        pcall(function()
+            if isfile(SAVE_FILE) then delfile(SAVE_FILE) end
+        end)
+        notify("SkyZenHub", "Pengaturan dihapus. Jalankan ulang script untuk default.")
+    else
+        notify("SkyZenHub", "Executor tidak mendukung delfile.")
+    end
+end)
+
+-- Tab KillAura
+local KillAuraTab = createTab("KillAura")
+addToggle(KillAuraTab, "Kill Aura", CONFIG.KA_ENABLED, function(v) setKillAura(v) end)
+addToggle(KillAuraTab, "Kill Aura NPC", CONFIG.NPC_KA, setKillAuraNpc)
+addStepper(KillAuraTab, "NPC Range", 20, 500, 20, CONFIG.NPC_KA_RANGE, function(v) CONFIG.NPC_KA_RANGE = v end)
+addStepper(KillAuraTab, "NPC Hit Delay (ms)", 0, 500, 10, CONFIG.NPC_KA_DELAY, function(v) CONFIG.NPC_KA_DELAY = v end)
+
+selectTab("Farm")
+
+local icon = Instance.new("TextButton")
+icon.Size = UDim2.new(0, 50, 0, 50)
+icon.Position = UDim2.new(0, 15, 0.4, 0)
+icon.Text = ""
+icon.Visible = false
+icon.Parent = gui
+makeLogo(icon)
+
+minBtn.MouseButton1Click:Connect(function() main.Visible = false icon.Visible = true end)
+icon.MouseButton1Click:Connect(function() main.Visible = true icon.Visible = false end)
+
+local confirm = Instance.new("Frame")
+confirm.Size = UDim2.new(1, 0, 1, 0)
+confirm.BackgroundColor3 = Color3.new(0, 0, 0)
+confirm.BackgroundTransparency = 0.35
+confirm.BorderSizePixel = 0
+confirm.Active = true
+confirm.Visible = false
+confirm.ZIndex = 20
+confirm.Parent = main
+
+local box = Instance.new("Frame")
+box.AnchorPoint = Vector2.new(0.5, 0.5)
+box.Position = UDim2.new(0.5, 0, 0.5, 0)
+box.Size = UDim2.new(0, 260, 0, 130)
+box.BackgroundColor3 = DARK
+box.ZIndex = 21
+box.Parent = confirm
+Instance.new("UICorner", box).CornerRadius = UDim.new(0, 10)
+local bs = Instance.new("UIStroke", box)
+bs.Color = GREY
+bs.Thickness = 1.5
+
+local ct = Instance.new("TextLabel")
+ct.Size = UDim2.new(1, -20, 0, 24)
+ct.Position = UDim2.new(0, 10, 0, 12)
+ct.BackgroundTransparency = 1
+ct.Text = "Delete script?"
+ct.Font = Enum.Font.GothamBlack
+ct.TextSize = 16
+ct.TextColor3 = Color3.fromRGB(235, 235, 240)
+ct.ZIndex = 22
+ct.Parent = box
+
+local cs = Instance.new("TextLabel")
+cs.Size = UDim2.new(1, -20, 0, 34)
+cs.Position = UDim2.new(0, 10, 0, 38)
+cs.BackgroundTransparency = 1
+cs.Text = "The script will be closed and all features turned off."
+cs.Font = Enum.Font.Gotham
+cs.TextSize = 12
+cs.TextWrapped = true
+cs.TextColor3 = Color3.fromRGB(190, 190, 200)
+cs.ZIndex = 22
+cs.Parent = box
+
+local function confirmBtn(text, x, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.5, -15, 0, 32)
+    b.Position = UDim2.new(x, x == 0 and 10 or 5, 1, -42)
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.ZIndex = 22
+    b.Parent = box
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    return b
+end
+local cancelBtn = confirmBtn("Cancel", 0, Color3.fromRGB(35, 35, 42))
+local yesBtn = confirmBtn("Yes, Delete", 0.5, RED)
+
+closeBtn.MouseButton1Click:Connect(function() confirm.Visible = true end)
+cancelBtn.MouseButton1Click:Connect(function() confirm.Visible = false end)
+yesBtn.MouseButton1Click:Connect(function()
+    CONFIG.ENABLED = false
+    CONFIG.FARM = false
+    CONFIG.TWEEN_FARM = false
+    CONFIG.KA_ENABLED = false
+    CONFIG.BREW_AUTO = false
+    local sf = getSwordFlight()
+    if sf then pcall(function() sf:FireServer(false) end) end
+    farmId = farmId + 1
+    tweenId = tweenId + 1
+    kaId = kaId + 1
+    brewId = brewId + 1
+    setAutoOrb(false)
+    setEspChest(false)
+    setKillAuraNpc(false)
+    setEspPlayers(false)
+    setEspHerb(false)
+    mgSetTap(false)
+    gui:Destroy()
+end)
+
+local function makeDraggable(handle, obj)
+    local dragging, start, startPos
+    handle.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            start = i.Position
+            startPos = obj.Position
+            i.Changed:Connect(function()
+                if i.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+            local d = i.Position - start
+            obj.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+end
+makeDraggable(header, main)
+makeDraggable(icon, icon)
+
+print("[SkyZenHub] Loaded")
+
+local remaining = math.max(0, LOAD_TIME - (os.clock() - loadStart) - 0.6)
+local stages = {
+    {0.68, "Loading modules..."},
+    {0.84, "Preparing features..."},
+    {0.96, "Almost ready..."},
+}
+for _, st in ipairs(stages) do
+    local d = remaining / #stages
+    setProgress(st[1], st[2], d)
+    task.wait(d)
+end
+setProgress(1, "Ready", 0.4)
+task.wait(0.6)
+
+local mainScale = Instance.new("UIScale", main)
+mainScale.Scale = 0.85
+main.Visible = true
+TS:Create(mainScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+TS:Create(loader, TweenInfo.new(0.35), {GroupTransparency = 1}):Play()
+task.wait(0.4)
+loader:Destroy()
+
+READY = true
+setupPromptUi()
+
+-- Hidupkan kembali fitur yang tersimpan dalam keadaan ON
+for _, cb in ipairs(pendingStart) do
+    pcall(cb, true)
+end
