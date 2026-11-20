@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v21"
+local TITLE = "SKYZENHUB - Herb v22"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -575,6 +575,11 @@ local btId = 0
 local btConn = nil
 local miniSeen = false
 
+local function bodyBreakthroughOnce()
+    local ev = getCultivationEvent("BodyBreakthrough")
+    if ev then pcall(function() ev:FireServer() end) end
+end
+
 local function sendBreakthroughResult()
     local ev = getCultivationEvent("BreakthroughMinigameResult")
     if ev then pcall(function() ev:FireServer(true) end) end
@@ -608,6 +613,7 @@ local function setBreakthrough(v)
             miniSeen = false
             local startEv = getCultivationEvent("Breakthrough")
             if startEv then pcall(function() startEv:FireServer() end) end
+            bodyBreakthroughOnce()
 
             local waited = 0
             while not miniSeen and waited < 3 and CONFIG.BREAKTHROUGH and btId == id do
@@ -2127,7 +2133,7 @@ addToggle(EspTab, "ESP Chest", CONFIG.ESP_CHEST, setEspChest)
 
 -- Tab Cultivate
 local CultTab = createTab("Cultivate")
-addToggle(CultTab, "Auto Breakthrough", CONFIG.BREAKTHROUGH, setBreakthrough)
+addToggle(CultTab, "Auto Breakthrough (Qi + Body)", CONFIG.BREAKTHROUGH, setBreakthrough)
 addToggle(CultTab, "Auto Minigame Breakthrough", CONFIG.MG_TAP, mgSetTap)
 addStepper(CultTab, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
 addStepper(CultTab, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
