@@ -17,10 +17,7 @@ local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
 local LOAD_TIME = 10
 
--- Auto Executor: nama file script di folder workspace executor
--- (dipakai kalau kolom "Script URL / File" di tab Misc dikosongkan)
 local SCRIPT_FILE = "SkyZenHub_Herb.lua"
--- Nama file penyimpanan pengaturan
 local SAVE_FILE = "SkyZenHub_Herb_Config.json"
 
 local function notify(title, text)
@@ -63,7 +60,7 @@ local CONFIG = {
     KA_INSTANT = true,
     KA_MAX_PER_FRAME = 8,
     KA_WHITELIST_FRIENDS = true,
-    MG_TAP = false, -- Auto Minigame Breakthrough (tap cincin emas)
+    MG_TAP = false,
     AUTO_EXEC = false,
     AUTO_SAVE = true,
     SCRIPT_SRC = "",
@@ -119,12 +116,20 @@ end
 
 loadConfig()
 
--- Kalau script ini dijalankan otomatis oleh Auto Executor tetapi
--- Auto Executor sudah dimatikan, script berhenti di sini.
+-- FIX: debug print biar kelihatan script sampai mana
+print("[SkyZenHub] Config loaded. AUTO_EXEC=" .. tostring(CONFIG.AUTO_EXEC))
+print("[SkyZenHub] Executor features: writefile=" .. tostring(writefile ~= nil)
+    .. " getcustomasset=" .. tostring((getcustomasset or getsynasset) ~= nil)
+    .. " fireproximityprompt=" .. tostring(fireproximityprompt ~= nil)
+    .. " queue_on_teleport=" .. tostring((queue_on_teleport or (syn and syn.queue_on_teleport)) ~= nil))
+
+-- FIX: guard SkyZenQueuedRun biar tidak exit diam-diam
 local genv = (getgenv and getgenv()) or _G
 if genv.SkyZenQueuedRun then
     genv.SkyZenQueuedRun = nil
     if not CONFIG.AUTO_EXEC then
+        warn("[SkyZenHub] Queued run detected but AUTO_EXEC=false, exiting.")
+        genv.SkyZenQueuedRun = nil
         do return end
     end
 end
@@ -155,6 +160,10 @@ local function hookSpots(spots)
     hooked[spots] = true
     for _, d in ipairs(spots:GetDescendants()) do hookPrompt(d) end
     spots.DescendantAdded:Connect(hookPrompt)
+    -- FIX: reset hook saat HerbSpots dihapus (misal setelah teleport)
+    spots.AncestryChanged:Connect(function(_, parent)
+        if not parent then hooked[spots] = nil end
+    end)
 end
 
 local function applyPromptUi(obj)
@@ -381,9 +390,12 @@ local TIER_COLORS = {
     [1] = Color3.fromRGB(90, 255, 120),
 }
 
+-- FIX: guard nil
 local function clearEspHerbs()
     for _, d in pairs(espHerbs) do
-        pcall(function() d.bb:Destroy() end)
+        if d and d.bb then
+            pcall(function() d.bb:Destroy() end)
+        end
     end
     espHerbs = {}
 end
@@ -413,10 +425,17 @@ local function addHerbEsp(spot, tier)
     espHerbs[spot] = { bb = bb, label = label }
 end
 
+-- FIX: race condition
 local function setEspHerb(v)
     CONFIG.ESP_HERB = v
     espLoopId = espLoopId + 1
-    clearEspHerbs()
+    local myId = espLoopId
+    task.defer(function()
+        task.wait(0.05)
+        if espLoopId == myId or not CONFIG.ESP_HERB then
+            clearEspHerbs()
+        end
+    end)
     if not v then return end
 
     local id = espLoopId
@@ -454,7 +473,9 @@ local function setEspHerb(v)
                     if not seen[spot] then stale[#stale + 1] = spot end
                 end
                 for _, spot in ipairs(stale) do
-                    pcall(function() espHerbs[spot].bb:Destroy() end)
+                    if espHerbs[spot] and espHerbs[spot].bb then
+                        pcall(function() espHerbs[spot].bb:Destroy() end)
+                    end
                     espHerbs[spot] = nil
                 end
             end
@@ -569,7 +590,18 @@ end
 -- Cultivation
 local function getCultivationEvent(name)
     local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
-    return folder and folder:FindFirstChild(name)
+    if not folder then return nil end
+    return folder:FindFirstChild(name)
+end
+
+-- FIX: versi blocking untuk setup fitur
+local function waitCultivationEvent(name, timeout)
+    local folder = ReplicatedStorage:FindFirstChild("CultivationEvents")
+    if not folder then
+        folder = ReplicatedStorage:WaitForChild("CultivationEvents", timeout or 10)
+    end
+    if not folder then return nil end
+    return folder:WaitForChild(name, timeout or 5)
 end
 
 local btId = 0
@@ -586,7 +618,6 @@ local function sendBreakthroughResult()
     if ev then pcall(function() ev:FireServer(true) end) end
 end
 
--- Heavenly Tribulation (petir + cincin): auto ABSORB tepat waktu
 local tribConn = nil
 local tribBusy = false
 local tribBusyAt = 0
@@ -615,7 +646,6 @@ local function tribOnEvent(id, action, plr, a3, a4)
             if okT and math.abs(target - nowT) < 10 then
                 wait = target - lead - nowT
             else
-                -- waktu server tidak cocok: pakai perkiraan (cincin kena sekitar 1.1 dtk setelah bolt)
                 wait = 1.1 - lead
             end
 
@@ -651,25 +681,30 @@ local function setBreakthrough(v)
     if not v then return end
     local id = btId
 
-    local miniEv = getCultivationEvent("StartBreakthroughMinigame")
-    if miniEv then
-        btConn = miniEv.OnClientEvent:Connect(function()
-            miniSeen = true
-            task.spawn(function()
-                task.wait(CONFIG.BT_DELAY)
-                if CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
-                    sendBreakthroughResult()
-                end
+    -- FIX: pakai waitCultivationEvent
+    task.spawn(function()
+        local miniEv = waitCultivationEvent("StartBreakthroughMinigame", 8)
+        if miniEv and CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
+            btConn = miniEv.OnClientEvent:Connect(function()
+                miniSeen = true
+                task.spawn(function()
+                    task.wait(CONFIG.BT_DELAY)
+                    if CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
+                        sendBreakthroughResult()
+                    end
+                end)
             end)
-        end)
-    end
+        end
+    end)
 
-    local tribEv = getCultivationEvent("Tribulation")
-    if tribEv then
-        tribConn = tribEv.OnClientEvent:Connect(function(action, plr, a3, a4)
-            tribOnEvent(id, action, plr, a3, a4)
-        end)
-    end
+    task.spawn(function()
+        local tribEv = waitCultivationEvent("Tribulation", 8)
+        if tribEv and CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
+            tribConn = tribEv.OnClientEvent:Connect(function(action, plr, a3, a4)
+                tribOnEvent(id, action, plr, a3, a4)
+            end)
+        end
+    end)
 
     task.spawn(function()
         while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id do
@@ -701,7 +736,7 @@ local function setBreakthrough(v)
 end
 
 ------------------------------------------------------------
--- AUTO MINIGAME BREAKTHROUGH (tap cincin emas)
+-- AUTO MINIGAME BREAKTHROUGH
 ------------------------------------------------------------
 local mgWatched = setmetatable({}, { __mode = "k" })
 local mgLetterRef = nil
@@ -718,10 +753,15 @@ local function mgVisibleChain(o)
     return sg == nil or sg.Enabled
 end
 
--- #F3D27A = R0.95 G0.82 B0.48 -> lolos
 local function mgIsGold(c)
     return c.R >= 0.88 and c.G >= 0.62 and c.B <= 0.58 and (c.R - c.B) >= 0.30
 end
+
+-- FIX: KEY_MAP untuk angka
+local KEY_MAP = {
+    ["1"]="One", ["2"]="Two", ["3"]="Three", ["4"]="Four", ["5"]="Five",
+    ["6"]="Six", ["7"]="Seven", ["8"]="Eight", ["9"]="Nine", ["0"]="Zero",
+}
 
 local function mgDoTap(reason)
     if not (CONFIG.ENABLED and CONFIG.MG_TAP) then return end
@@ -762,7 +802,10 @@ local function mgDoTap(reason)
             if sg and not sg.IgnoreGuiInset then
                 pos = pos + game:GetService("GuiService"):GetGuiInset()
             end
-            local okK, kc = pcall(function() return Enum.KeyCode[letter] end)
+            -- FIX: pakai KEY_MAP
+            local okK, kc = pcall(function()
+                return Enum.KeyCode[KEY_MAP[letter] or letter]
+            end)
             if okK and kc then
                 pcall(function() VIM:SendKeyEvent(true, kc, false, game) end)
                 task.wait(0.02)
@@ -1281,9 +1324,10 @@ local function npcScan(id)
         end
     end
 
+    -- FIX: guard type table
     if getnilinstances then
         local ok, nils = pcall(getnilinstances)
-        if ok and nils then
+        if ok and type(nils) == "table" then
             for _, o in ipairs(nils) do
                 n = n + 1
                 if n % 400 == 0 then
@@ -1527,7 +1571,7 @@ local function setAutoBrew(v)
 end
 
 ------------------------------------------------------------
--- AUTO EXECUTOR (jalan otomatis setelah pindah server/teleport)
+-- AUTO EXECUTOR
 ------------------------------------------------------------
 local execQueued = false
 
@@ -1537,14 +1581,17 @@ local function getQueueFn()
         or (fluxus and fluxus.queue_on_teleport)
 end
 
+-- FIX: escape manual
 local function buildQueueCode()
     local src = CONFIG.SCRIPT_SRC
     local load
     if src:match("^https?://") then
-        load = string.format("loadstring(game:HttpGet(%q))()", src)
+        local escaped = src:gsub("\\", "\\\\"):gsub("\"", "\\\"")
+        load = string.format("loadstring(game:HttpGet(\"%s\"))()", escaped)
     else
         local f = (src ~= "" and src) or SCRIPT_FILE
-        load = string.format("loadstring(readfile(%q))()", f)
+        local escaped = f:gsub("\\", "\\\\"):gsub("\"", "\\\"")
+        load = string.format("loadstring(readfile(\"%s\"))()", escaped)
     end
     return "if not game:IsLoaded() then game.Loaded:Wait() end "
         .. "task.wait(2) "
@@ -1582,7 +1629,6 @@ LocalPlayer.Idled:Connect(function()
     end
 end)
 
--- Kalau Auto Executor aktif, antri ulang tiap kali teleport dimulai
 LocalPlayer.OnTeleport:Connect(function(state)
     if CONFIG.ENABLED and CONFIG.AUTO_EXEC and not execQueued then
         local q = getQueueFn()
@@ -1612,11 +1658,16 @@ local function isImage(data)
     return h == "\137PNG" or h:sub(1, 2) == "\255\216" or h == "RIFF"
 end
 
+-- FIX: cache + fallback
 local function loadImage(url, fname)
     if url == "" then return nil, "empty URL" end
-    if not writefile then return nil, "no writefile" end
+    if not writefile or not readfile then return nil, "no writefile/readfile" end
     local getAsset = getcustomasset or getsynasset
-    if not getAsset then return nil, "no getcustomasset" end
+    if not getAsset then return nil, "no getcustomasset/getsynasset" end
+    if isfile and isfile(fname) then
+        local ok, id = pcall(getAsset, fname)
+        if ok and id then return id end
+    end
 
     local data
     local req = (syn and syn.request) or request or http_request
@@ -1942,7 +1993,6 @@ local function nextOrder(page)
     return orderCounter[page]
 end
 
--- Toggle yang tersimpan sebagai ON akan dihidupkan setelah loading selesai
 local pendingStart = {}
 
 local function addToggle(page, name, default, callback)
