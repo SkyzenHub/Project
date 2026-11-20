@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v22"
+local TITLE = "SKYZENHUB - Herb v26"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -67,6 +67,7 @@ local CONFIG = {
     AUTO_EXEC = false,
     AUTO_SAVE = true,
     SCRIPT_SRC = "",
+    TRIB_LEAD = 30,
 }
 
 ------------------------------------------------------------
@@ -76,7 +77,7 @@ local SAVE_KEYS = {
     "FARM", "TWEEN_FARM", "TWEEN_SPEED", "SCAN_DELAY", "PURGE", "PROMPT_UP",
     "ANTI_AFK", "BREW_AUTO", "ORB_AUTO", "ESP_CHEST", "NPC_KA", "NPC_KA_RANGE",
     "NPC_KA_DELAY", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "BT_INTERVAL",
-    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC",
+    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD",
 }
 
 local function saveConfig()
@@ -370,6 +371,8 @@ local function setTweenFarm(v)
     end
 end
 
+local setEspHerb
+do
 -- ESP Herb
 local espHerbs = {}
 local espLoopId = 0
@@ -412,7 +415,7 @@ local function addHerbEsp(spot, tier)
     espHerbs[spot] = { bb = bb, label = label }
 end
 
-local function setEspHerb(v)
+function setEspHerb(v)
     CONFIG.ESP_HERB = v
     espLoopId = espLoopId + 1
     clearEspHerbs()
@@ -462,7 +465,10 @@ local function setEspHerb(v)
         if espLoopId == id then clearEspHerbs() end
     end)
 end
+end
 
+local setEspPlayers
+do
 -- ESP Player
 local espPlayers = {}
 local espPlayerLoop = nil
@@ -513,7 +519,7 @@ local function buildPlayerEsp(plr, char, root)
     return d
 end
 
-local function setEspPlayers(v)
+function setEspPlayers(v)
     CONFIG.ESP_PLAYERS = v
     if espPlayerLoop then
         espPlayerLoop:Disconnect()
@@ -564,6 +570,7 @@ local function setEspPlayers(v)
         for _, plr in ipairs(gone) do removePlayerEsp(plr) end
     end)
 end
+end
 
 -- Cultivation
 local function getCultivationEvent(name)
@@ -571,6 +578,8 @@ local function getCultivationEvent(name)
     return folder and folder:FindFirstChild(name)
 end
 
+local setBreakthrough
+do
 local btId = 0
 local btConn = nil
 local miniSeen = false
@@ -585,13 +594,68 @@ local function sendBreakthroughResult()
     if ev then pcall(function() ev:FireServer(true) end) end
 end
 
-local function setBreakthrough(v)
+-- Heavenly Tribulation (petir + cincin): auto ABSORB tepat waktu
+local tribConn = nil
+local tribBusy = false
+local tribBusyAt = 0
+
+local function tribOnEvent(id, action, plr, a3, a4)
+    if plr ~= LocalPlayer then return end
+    if not (CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id) then return end
+
+    if action == "gather" then
+        tribBusy = true
+        tribBusyAt = os.clock()
+    elseif action == "end" then
+        tribBusy = false
+    elseif action == "bolt" then
+        local index, target = a3, a4
+        if type(index) ~= "number" or type(target) ~= "number" then return end
+        tribBusy = true
+        tribBusyAt = os.clock()
+
+        task.spawn(function()
+            local lead = CONFIG.TRIB_LEAD / 1000
+            local okT, nowT = pcall(function() return workspace:GetServerTimeNow() end)
+            local delta
+            local wait
+
+            if okT and math.abs(target - nowT) < 10 then
+                wait = target - lead - nowT
+            else
+                -- waktu server tidak cocok: pakai perkiraan (cincin kena sekitar 1.1 dtk setelah bolt)
+                wait = 1.1 - lead
+            end
+
+            if wait > 0 then task.wait(wait) end
+            if not (CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id) then return end
+
+            if okT and math.abs(target - nowT) < 10 then
+                delta = workspace:GetServerTimeNow() - target
+            else
+                delta = -lead
+            end
+
+            local ev = getCultivationEvent("Tribulation")
+            if ev then
+                pcall(function() ev:FireServer("absorb", index, delta) end)
+            end
+        end)
+    end
+end
+
+function setBreakthrough(v)
     CONFIG.BREAKTHROUGH = v
     btId = btId + 1
     if btConn then
         btConn:Disconnect()
         btConn = nil
     end
+    if tribConn then
+        pcall(function() tribConn:Disconnect() end)
+        tribConn = nil
+    end
+    tribBusy = false
     if not v then return end
     local id = btId
 
@@ -608,31 +672,45 @@ local function setBreakthrough(v)
         end)
     end
 
+    local tribEv = getCultivationEvent("Tribulation")
+    if tribEv then
+        tribConn = tribEv.OnClientEvent:Connect(function(action, plr, a3, a4)
+            tribOnEvent(id, action, plr, a3, a4)
+        end)
+    end
+
     task.spawn(function()
         while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id do
-            miniSeen = false
-            local startEv = getCultivationEvent("Breakthrough")
-            if startEv then pcall(function() startEv:FireServer() end) end
-            bodyBreakthroughOnce()
+            if tribBusy and os.clock() - tribBusyAt > 90 then tribBusy = false end
 
-            local waited = 0
-            while not miniSeen and waited < 3 and CONFIG.BREAKTHROUGH and btId == id do
-                task.wait(0.1)
-                waited = waited + 0.1
-            end
+            if not tribBusy then
+                miniSeen = false
+                local startEv = getCultivationEvent("Breakthrough")
+                if startEv then pcall(function() startEv:FireServer() end) end
+                bodyBreakthroughOnce()
 
-            if miniSeen then
-                task.wait(CONFIG.BT_DELAY + 1)
-            elseif CONFIG.BREAKTHROUGH and btId == id then
-                task.wait(CONFIG.BT_DELAY)
-                sendBreakthroughResult()
+                local waited = 0
+                while not miniSeen and waited < 3 and CONFIG.BREAKTHROUGH and btId == id do
+                    task.wait(0.1)
+                    waited = waited + 0.1
+                end
+
+                if miniSeen then
+                    task.wait(CONFIG.BT_DELAY + 1)
+                elseif CONFIG.BREAKTHROUGH and btId == id and not tribBusy then
+                    task.wait(CONFIG.BT_DELAY)
+                    sendBreakthroughResult()
+                end
             end
 
             task.wait(CONFIG.BT_INTERVAL)
         end
     end)
 end
+end
 
+local mgSetTap
+do
 ------------------------------------------------------------
 -- AUTO MINIGAME BREAKTHROUGH (tap cincin emas)
 ------------------------------------------------------------
@@ -790,7 +868,7 @@ local function mgStopGui()
     mgLetterRef = nil
 end
 
-local function mgSetTap(v)
+function mgSetTap(v)
     CONFIG.MG_TAP = v
     if v then
         mgStartGui()
@@ -799,12 +877,15 @@ local function mgSetTap(v)
         mgStopGui()
     end
 end
+end
 
+local setAutoOrb
+do
 -- Auto Orb
 local orbId = 0
 local orbConn = nil
 
-local function setAutoOrb(v)
+function setAutoOrb(v)
     CONFIG.ORB_AUTO = v
     orbId = orbId + 1
     if orbConn then
@@ -828,6 +909,7 @@ local function setAutoOrb(v)
         end)
     end)
 end
+end
 
 -- Kill Aura (multi-target)
 local function getCombatEvent()
@@ -835,6 +917,8 @@ local function getCombatEvent()
     return folder and folder:FindFirstChild("CombatHit")
 end
 
+local setKillAura
+do
 local kaId = 0
 local kaLastTargets = {}
 
@@ -921,7 +1005,7 @@ local function kaLoop(id)
     end
 end
 
-local function setKillAura(v)
+function setKillAura(v)
     CONFIG.KA_ENABLED = v
     kaId = kaId + 1
     kaLastTargets = {}
@@ -929,7 +1013,10 @@ local function setKillAura(v)
         task.spawn(kaLoop, kaId)
     end
 end
+end
 
+local setEspChest
+do
 -- ESP Chest
 local chestEsp = {}
 local chestConns = {}
@@ -1130,7 +1217,7 @@ local function clearChestEsp()
     chestEsp = {}
 end
 
-local function setEspChest(v)
+function setEspChest(v)
     CONFIG.ESP_CHEST = v
     chestRunId = chestRunId + 1
     clearChestEsp()
@@ -1174,7 +1261,10 @@ local function setEspChest(v)
         end
     end)
 end
+end
 
+local setKillAuraNpc
+do
 -- Kill Aura NPC
 local npcId = 0
 local npcCandidates = {}
@@ -1399,7 +1489,7 @@ local function npcLoop(id)
     end
 end
 
-local function setKillAuraNpc(v)
+function setKillAuraNpc(v)
     CONFIG.NPC_KA = v
     npcId = npcId + 1
     if v then
@@ -1409,7 +1499,10 @@ local function setKillAuraNpc(v)
         npcRingDestroy()
     end
 end
+end
 
+local setAutoBrew
+do
 -- Perfect Brew + Auto Claim
 local brewId = 0
 local PERFECT_STOKE = 2.3241790770116495
@@ -1451,12 +1544,13 @@ local function brewLoop(id)
     end
 end
 
-local function setAutoBrew(v)
+function setAutoBrew(v)
     CONFIG.BREW_AUTO = v
     brewId = brewId + 1
     if v then
         task.spawn(brewLoop, brewId)
     end
+end
 end
 
 ------------------------------------------------------------
@@ -2137,6 +2231,7 @@ addToggle(CultTab, "Auto Breakthrough (Qi + Body)", CONFIG.BREAKTHROUGH, setBrea
 addToggle(CultTab, "Auto Minigame Breakthrough", CONFIG.MG_TAP, mgSetTap)
 addStepper(CultTab, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
 addStepper(CultTab, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
+addStepper(CultTab, "Absorb Lead (ms)", 0, 150, 10, CONFIG.TRIB_LEAD, function(v) CONFIG.TRIB_LEAD = v end)
 
 -- Tab Misc
 local MiscTab = createTab("Misc")
@@ -2262,14 +2357,15 @@ yesBtn.MouseButton1Click:Connect(function()
     if sf then pcall(function() sf:FireServer(false) end) end
     farmId = farmId + 1
     tweenId = tweenId + 1
-    kaId = kaId + 1
-    brewId = brewId + 1
+    setKillAura(false)
+    setAutoBrew(false)
     setAutoOrb(false)
     setEspChest(false)
     setKillAuraNpc(false)
     setEspPlayers(false)
     setEspHerb(false)
     mgSetTap(false)
+    setBreakthrough(false)
     gui:Destroy()
 end)
 
