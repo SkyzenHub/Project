@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v26"
+local TITLE = "SKYZENHUB - Herb v28"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -75,7 +75,7 @@ local CONFIG = {
 ------------------------------------------------------------
 local SAVE_KEYS = {
     "FARM", "TWEEN_FARM", "TWEEN_SPEED", "SCAN_DELAY", "PURGE", "PROMPT_UP",
-    "ANTI_AFK", "BREW_AUTO", "ORB_AUTO", "ESP_CHEST", "NPC_KA", "NPC_KA_RANGE",
+    "ANTI_AFK", "BREW_AUTO", "ORB_AUTO", "ESP_CHEST", "NPC_KA", "NPC_KA_RANGE", "NPC_KA_MAX",
     "NPC_KA_DELAY", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "BT_INTERVAL",
     "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD",
 }
@@ -1324,8 +1324,60 @@ end
 local function npcScanLoop(id)
     while CONFIG.ENABLED and CONFIG.NPC_KA and npcId == id do
         pcall(npcScan, id)
-        task.wait(3)
+        task.wait(15)
     end
+end
+
+-- Pemindaian langsung: NPC baru terdeteksi saat muncul, tanpa menunggu scan penuh
+local npcConns = {}
+
+local function npcDisconnect()
+    for _, c in ipairs(npcConns) do pcall(function() c:Disconnect() end) end
+    npcConns = {}
+end
+
+local function npcAddLive(m, id)
+    if not npcIsCandidate(m) then return end
+    task.spawn(function()
+        for _ = 1, 20 do
+            if npcId ~= id then return end
+            local r = npcRootOf(m)
+            if r then
+                npcCandidates[m] = r
+                return
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function npcStartLive(id)
+    -- NPC yang sudah ada: ambil sekarang juga, bertahap supaya tidak lag
+    task.spawn(function()
+        local n = 0
+        for _, d in ipairs(workspace:GetDescendants()) do
+            n = n + 1
+            if n % 500 == 0 then
+                task.wait()
+                if npcId ~= id then return end
+            end
+            if d:IsA("Humanoid") then
+                local m = d.Parent
+                if m then npcAddLive(m, id) end
+            end
+        end
+    end)
+
+    -- NPC yang baru muncul
+    npcConns[#npcConns + 1] = workspace.DescendantAdded:Connect(function(d)
+        if npcId ~= id then return end
+        if d:IsA("Humanoid") then
+            local m = d.Parent
+            if m then npcAddLive(m, id) end
+        elseif d:IsA("Model") and string.find(d.Name, "Disciple", 1, true) then
+            npcAddLive(d, id)
+        end
+    end)
 end
 
 local DAMAGE_KEYS = { "damage", "attack", "atk", "dmg", "power", "strength" }
@@ -1426,6 +1478,7 @@ local function npcNotify(text)
 end
 
 local function npcLoop(id)
+    npcStartLive(id)
     task.spawn(npcScanLoop, id)
 
     local src = npcFindDamageSource()
@@ -1440,33 +1493,19 @@ local function npcLoop(id)
     local lastDmg, lastFind, lastHit = 0, os.clock(), 0
 
     while CONFIG.ENABLED and CONFIG.NPC_KA and npcId == id do
-        local now = os.clock()
-
-        if now - lastDmg > 0.5 then
-            lastDmg = now
-            local d = npcReadDamage(src)
-            if d then
-                dmg = d
-            elseif now - lastFind > 5 then
-                lastFind = now
-                src = npcFindDamageSource()
-                local d2 = npcReadDamage(src)
-                if d2 then dmg = d2 end
-            end
-        end
-
         local char = LocalPlayer.Character
         local myRoot = char and char:FindFirstChild("HumanoidRootPart")
         pcall(npcRingUpdate, myRoot)
 
-        if myRoot and now - lastHit >= CONFIG.NPC_KA_DELAY / 1000 then
-            lastHit = now
-            local ev = getCombatEvent()
-            if ev then
-                local myPos = myRoot.Position
-                local range = CONFIG.NPC_KA_RANGE
-                local list = {}
-                for m, part in pairs(npcCandidates) do
+        -- cek apakah ada NPC di dalam range
+        local list = {}
+        if myRoot then
+            local myPos = myRoot.Position
+            local range = CONFIG.NPC_KA_RANGE
+            for m, part in pairs(npcCandidates) do
+                if not part.Parent then
+                    npcCandidates[m] = nil
+                else
                     local dist = (part.Position - myPos).Magnitude
                     if dist <= range then
                         local hum = m:FindFirstChildOfClass("Humanoid")
@@ -1477,21 +1516,48 @@ local function npcLoop(id)
                         end
                     end
                 end
-                table.sort(list, function(a, b) return a.dist < b.dist end)
-
-                for i = 1, math.min(#list, CONFIG.NPC_KA_MAX) do
-                    ev:FireServer(list[i].inst, dmg)
-                end
             end
         end
 
-        task.wait()
+        if #list == 0 then
+            -- tidak ada NPC di range: mode hemat, cek 5 kali per detik saja
+            task.wait(0.2)
+        else
+            local now = os.clock()
+
+            if now - lastDmg > 0.5 then
+                lastDmg = now
+                local d = npcReadDamage(src)
+                if d then
+                    dmg = d
+                elseif now - lastFind > 5 then
+                    lastFind = now
+                    src = npcFindDamageSource()
+                    local d2 = npcReadDamage(src)
+                    if d2 then dmg = d2 end
+                end
+            end
+
+            if now - lastHit >= CONFIG.NPC_KA_DELAY / 1000 then
+                lastHit = now
+                local ev = getCombatEvent()
+                if ev then
+                    table.sort(list, function(a, b) return a.dist < b.dist end)
+                    for i = 1, math.min(#list, CONFIG.NPC_KA_MAX) do
+                        ev:FireServer(list[i].inst, dmg)
+                    end
+                end
+            end
+
+            task.wait()
+        end
     end
 end
 
 function setKillAuraNpc(v)
     CONFIG.NPC_KA = v
     npcId = npcId + 1
+    npcDisconnect()
     if v then
         task.spawn(npcLoop, npcId)
     else
@@ -2268,6 +2334,7 @@ local KillAuraTab = createTab("KillAura")
 addToggle(KillAuraTab, "Kill Aura", CONFIG.KA_ENABLED, function(v) setKillAura(v) end)
 addToggle(KillAuraTab, "Kill Aura NPC", CONFIG.NPC_KA, setKillAuraNpc)
 addStepper(KillAuraTab, "NPC Range", 20, 500, 20, CONFIG.NPC_KA_RANGE, function(v) CONFIG.NPC_KA_RANGE = v end)
+addStepper(KillAuraTab, "NPC Max Target", 1, 20, 1, CONFIG.NPC_KA_MAX, function(v) CONFIG.NPC_KA_MAX = v end)
 addStepper(KillAuraTab, "NPC Hit Delay (ms)", 0, 500, 10, CONFIG.NPC_KA_DELAY, function(v) CONFIG.NPC_KA_DELAY = v end)
 
 selectTab("Farm")
