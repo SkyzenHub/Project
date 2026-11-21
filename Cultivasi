@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v28"
+local TITLE = "SKYZENHUB - Herb v29"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -68,6 +68,8 @@ local CONFIG = {
     AUTO_SAVE = true,
     SCRIPT_SRC = "",
     TRIB_LEAD = 30,
+    MEDITATE = false,
+    MED_EVERY = 30,
 }
 
 ------------------------------------------------------------
@@ -77,7 +79,7 @@ local SAVE_KEYS = {
     "FARM", "TWEEN_FARM", "TWEEN_SPEED", "SCAN_DELAY", "PURGE", "PROMPT_UP",
     "ANTI_AFK", "BREW_AUTO", "ORB_AUTO", "ESP_CHEST", "NPC_KA", "NPC_KA_RANGE", "NPC_KA_MAX",
     "NPC_KA_DELAY", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "BT_INTERVAL",
-    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD",
+    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD", "MEDITATE", "MED_EVERY",
 }
 
 local function saveConfig()
@@ -140,6 +142,7 @@ local function activeTiers()
 end
 
 local READY = false
+local medPause = false
 local farmId = 0
 
 local hooked = {}
@@ -606,13 +609,16 @@ local function tribOnEvent(id, action, plr, a3, a4)
     if action == "gather" then
         tribBusy = true
         tribBusyAt = os.clock()
+        medPause = true
     elseif action == "end" then
         tribBusy = false
+        medPause = false
     elseif action == "bolt" then
         local index, target = a3, a4
         if type(index) ~= "number" or type(target) ~= "number" then return end
         tribBusy = true
         tribBusyAt = os.clock()
+        medPause = true
 
         task.spawn(function()
             local lead = CONFIG.TRIB_LEAD / 1000
@@ -656,6 +662,7 @@ function setBreakthrough(v)
         tribConn = nil
     end
     tribBusy = false
+    medPause = false
     if not v then return end
     local id = btId
 
@@ -663,11 +670,14 @@ function setBreakthrough(v)
     if miniEv then
         btConn = miniEv.OnClientEvent:Connect(function()
             miniSeen = true
+            medPause = true
             task.spawn(function()
                 task.wait(CONFIG.BT_DELAY)
                 if CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id then
                     sendBreakthroughResult()
                 end
+                task.wait(2)
+                medPause = tribBusy
             end)
         end)
     end
@@ -681,7 +691,10 @@ function setBreakthrough(v)
 
     task.spawn(function()
         while CONFIG.ENABLED and CONFIG.BREAKTHROUGH and btId == id do
-            if tribBusy and os.clock() - tribBusyAt > 90 then tribBusy = false end
+            if tribBusy and os.clock() - tribBusyAt > 90 then
+                tribBusy = false
+                medPause = false
+            end
 
             if not tribBusy then
                 miniSeen = false
@@ -1619,6 +1632,53 @@ function setAutoBrew(v)
 end
 end
 
+-- Auto Cultivate (meditasi terus, berhenti sementara saat breakthrough)
+local setAutoMeditate
+do
+    local medId = 0
+    local medConn = nil
+
+    function setAutoMeditate(v)
+        CONFIG.MEDITATE = v
+        medId = medId + 1
+        if medConn then
+            pcall(function() medConn:Disconnect() end)
+            medConn = nil
+        end
+        if not v then return end
+        local id = medId
+
+        local needFire = true
+        local lastFire = 0
+        local resumeAt = 0
+
+        -- setelah respawn, meditasi lagi
+        medConn = LocalPlayer.CharacterAdded:Connect(function()
+            needFire = true
+            resumeAt = os.clock() + 3
+        end)
+
+        task.spawn(function()
+            while CONFIG.ENABLED and CONFIG.MEDITATE and medId == id do
+                local now = os.clock()
+                if medPause then
+                    -- breakthrough sedang berjalan: jangan ganggu, lanjut setelah selesai
+                    needFire = true
+                    resumeAt = now + 3
+                elseif now >= resumeAt and (needFire or now - lastFire >= CONFIG.MED_EVERY) then
+                    local ev = getCultivationEvent("StartMeditate")
+                    if ev then
+                        pcall(function() ev:FireServer() end)
+                    end
+                    lastFire = now
+                    needFire = false
+                end
+                task.wait(0.5)
+            end
+        end)
+    end
+end
+
 ------------------------------------------------------------
 -- AUTO EXECUTOR (jalan otomatis setelah pindah server/teleport)
 ------------------------------------------------------------
@@ -2293,11 +2353,13 @@ addToggle(EspTab, "ESP Chest", CONFIG.ESP_CHEST, setEspChest)
 
 -- Tab Cultivate
 local CultTab = createTab("Cultivate")
+addToggle(CultTab, "Auto Cultivate (Meditasi)", CONFIG.MEDITATE, setAutoMeditate)
 addToggle(CultTab, "Auto Breakthrough (Qi + Body)", CONFIG.BREAKTHROUGH, setBreakthrough)
 addToggle(CultTab, "Auto Minigame Breakthrough", CONFIG.MG_TAP, mgSetTap)
 addStepper(CultTab, "Minigame Wait (s)", 1, 15, 1, CONFIG.BT_DELAY, function(v) CONFIG.BT_DELAY = v end)
 addStepper(CultTab, "Retry Every (s)", 1, 60, 1, CONFIG.BT_INTERVAL, function(v) CONFIG.BT_INTERVAL = v end)
 addStepper(CultTab, "Absorb Lead (ms)", 0, 150, 10, CONFIG.TRIB_LEAD, function(v) CONFIG.TRIB_LEAD = v end)
+addStepper(CultTab, "Meditate Every (s)", 10, 120, 10, CONFIG.MED_EVERY, function(v) CONFIG.MED_EVERY = v end)
 
 -- Tab Misc
 local MiscTab = createTab("Misc")
@@ -2426,6 +2488,7 @@ yesBtn.MouseButton1Click:Connect(function()
     tweenId = tweenId + 1
     setKillAura(false)
     setAutoBrew(false)
+    setAutoMeditate(false)
     setAutoOrb(false)
     setEspChest(false)
     setKillAuraNpc(false)
