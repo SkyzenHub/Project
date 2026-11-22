@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v30"
+local TITLE = "SKYZENHUB - Herb v31"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -72,6 +72,9 @@ local CONFIG = {
     MED_EVERY = 30,
     ESP_NPC = false,
     ESP_NPC_RANGE = 300,
+    NPC_TWEEN = false,
+    NPC_HOVER = 10,
+    NPC_TWEEN_RANGE = 500,
 }
 
 ------------------------------------------------------------
@@ -81,7 +84,7 @@ local SAVE_KEYS = {
     "FARM", "TWEEN_FARM", "TWEEN_SPEED", "SCAN_DELAY", "PURGE", "PROMPT_UP",
     "ANTI_AFK", "BREW_AUTO", "ORB_AUTO", "ESP_CHEST", "NPC_KA", "NPC_KA_RANGE", "NPC_KA_MAX",
     "NPC_KA_DELAY", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "BT_INTERVAL",
-    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD", "MEDITATE", "MED_EVERY", "ESP_NPC", "ESP_NPC_RANGE",
+    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD", "MEDITATE", "MED_EVERY", "ESP_NPC", "ESP_NPC_RANGE", "NPC_TWEEN", "NPC_HOVER", "NPC_TWEEN_RANGE",
 }
 
 local function saveConfig()
@@ -1279,6 +1282,7 @@ end
 end
 
 local setKillAuraNpc
+local setNpcTween
 do
 -- Kill Aura NPC
 local npcId = 0
@@ -1580,6 +1584,95 @@ function setKillAuraNpc(v)
         npcRingDestroy()
     end
 end
+
+    -- Tween NPC: meluncur dan melayang di atas NPC terdekat (Kill Aura NPC yang menyerang)
+    local npcTweenId = 0
+
+    local function npcPickTarget(myPos)
+        local best, bestPart, bestD = nil, nil, nil
+        local maxR = CONFIG.NPC_TWEEN_RANGE
+        for m, part in pairs(npcCandidates) do
+            if part.Parent and m:IsDescendantOf(workspace) then
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                if not (hum and hum.Health <= 0) then
+                    local d = (part.Position - myPos).Magnitude
+                    if d <= maxR and (not bestD or d < bestD) then
+                        best, bestPart, bestD = m, part, d
+                    end
+                end
+            end
+        end
+        return best, bestPart
+    end
+
+    function setNpcTween(v)
+        CONFIG.NPC_TWEEN = v
+        npcTweenId = npcTweenId + 1
+
+        if not CONFIG.TWEEN_FARM then
+            local sf = getSwordFlight()
+            if sf then pcall(function() sf:FireServer(v) end) end
+        end
+        if not v then return end
+        if not CONFIG.NPC_KA then
+            notify("Tween NPC", "Nyalakan juga Kill Aura NPC supaya NPC diserang.")
+        end
+        local id = npcTweenId
+
+        task.spawn(function()
+            local target, tpart = nil, nil
+            while CONFIG.ENABLED and CONFIG.NPC_TWEEN and npcTweenId == id do
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+                if not hrp or not CONFIG.NPC_KA or CONFIG.TWEEN_FARM or medPause then
+                    target = nil
+                    task.wait(0.3)
+                else
+                    -- cek target masih hidup
+                    if target then
+                        local hum = target:FindFirstChildOfClass("Humanoid")
+                        if not (tpart and tpart.Parent and target:IsDescendantOf(workspace))
+                            or (hum and hum.Health <= 0) then
+                            target = nil
+                        end
+                    end
+                    if not target then
+                        target, tpart = npcPickTarget(hrp.Position)
+                    end
+
+                    if not target then
+                        task.wait(0.3)
+                    else
+                        local rot = hrp.CFrame - hrp.CFrame.Position
+                        local hover = tpart.Position + Vector3.new(0, CONFIG.NPC_HOVER, 0)
+                        local goal = CFrame.new(hover) * rot
+                        local dist = (hrp.Position - hover).Magnitude
+
+                        if dist > 6 then
+                            local t = math.max(dist / CONFIG.TWEEN_SPEED, 0.02)
+                            local tw = TS:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = goal})
+                            local done = false
+                            local conn = tw.Completed:Connect(function() done = true end)
+                            tw:Play()
+                            while not done and CONFIG.NPC_TWEEN and npcTweenId == id and tpart.Parent do
+                                task.wait(0.05)
+                                local hum = target:FindFirstChildOfClass("Humanoid")
+                                if hum and hum.Health <= 0 then break end
+                            end
+                            conn:Disconnect()
+                            if not done then tw:Cancel() end
+                        else
+                            -- sudah di atas NPC: tahan posisi
+                            hrp.CFrame = goal
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            task.wait()
+                        end
+                    end
+                end
+            end
+        end)
+    end
 end
 
 local setAutoBrew
@@ -2563,6 +2656,9 @@ addToggle(KillAuraTab, "Kill Aura NPC", CONFIG.NPC_KA, setKillAuraNpc)
 addStepper(KillAuraTab, "NPC Range", 20, 500, 20, CONFIG.NPC_KA_RANGE, function(v) CONFIG.NPC_KA_RANGE = v end)
 addStepper(KillAuraTab, "NPC Max Target", 1, 20, 1, CONFIG.NPC_KA_MAX, function(v) CONFIG.NPC_KA_MAX = v end)
 addStepper(KillAuraTab, "NPC Hit Delay (ms)", 0, 500, 10, CONFIG.NPC_KA_DELAY, function(v) CONFIG.NPC_KA_DELAY = v end)
+addToggle(KillAuraTab, "Tween NPC (+ Kill Aura NPC)", CONFIG.NPC_TWEEN, setNpcTween)
+addStepper(KillAuraTab, "NPC Hover Height", 5, 40, 5, CONFIG.NPC_HOVER, function(v) CONFIG.NPC_HOVER = v end)
+addStepper(KillAuraTab, "NPC Tween Range", 100, 1500, 100, CONFIG.NPC_TWEEN_RANGE, function(v) CONFIG.NPC_TWEEN_RANGE = v end)
 
 selectTab("Farm")
 
@@ -2655,6 +2751,7 @@ yesBtn.MouseButton1Click:Connect(function()
     setAutoBrew(false)
     setAutoMeditate(false)
     setEspNpc(false)
+    setNpcTween(false)
     setAutoOrb(false)
     setEspChest(false)
     setKillAuraNpc(false)
