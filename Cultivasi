@@ -11,7 +11,7 @@ local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 ------------------------------------------------------------
 -- SETTINGS
 ------------------------------------------------------------
-local TITLE = "SKYZENHUB - Herb v29"
+local TITLE = "SKYZENHUB - Herb v30"
 local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
 local LOGO_URL = PHOTO_URL
 local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
@@ -70,6 +70,8 @@ local CONFIG = {
     TRIB_LEAD = 30,
     MEDITATE = false,
     MED_EVERY = 30,
+    ESP_NPC = false,
+    ESP_NPC_RANGE = 300,
 }
 
 ------------------------------------------------------------
@@ -79,7 +81,7 @@ local SAVE_KEYS = {
     "FARM", "TWEEN_FARM", "TWEEN_SPEED", "SCAN_DELAY", "PURGE", "PROMPT_UP",
     "ANTI_AFK", "BREW_AUTO", "ORB_AUTO", "ESP_CHEST", "NPC_KA", "NPC_KA_RANGE", "NPC_KA_MAX",
     "NPC_KA_DELAY", "ESP_HERB", "ESP_PLAYERS", "BREAKTHROUGH", "BT_INTERVAL",
-    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD", "MEDITATE", "MED_EVERY",
+    "BT_DELAY", "KA_ENABLED", "MG_TAP", "AUTO_EXEC", "AUTO_SAVE", "SCRIPT_SRC", "TRIB_LEAD", "MEDITATE", "MED_EVERY", "ESP_NPC", "ESP_NPC_RANGE",
 }
 
 local function saveConfig()
@@ -1632,6 +1634,167 @@ function setAutoBrew(v)
 end
 end
 
+-- ESP NPC (nama, jarak, HP) - hemat: hanya NPC dalam range yang digambar
+local setEspNpc
+do
+    local npcEspId = 0
+    local npcEspConns = {}
+    local npcEspData = {}
+
+    local function disconnectAll()
+        for _, c in ipairs(npcEspConns) do pcall(function() c:Disconnect() end) end
+        npcEspConns = {}
+    end
+
+    local function clearAll()
+        for _, d in pairs(npcEspData) do
+            if d.bb then pcall(function() d.bb:Destroy() end) end
+        end
+        npcEspData = {}
+    end
+
+    local function isNpcModel(m)
+        if not m:IsA("Model") then return false end
+        if Players:GetPlayerFromCharacter(m) then return false end
+        if m:FindFirstChildOfClass("Humanoid") then return true end
+        return string.find(m.Name, "Disciple", 1, true) ~= nil
+    end
+
+    local function rootOf(m)
+        return m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+    end
+
+    local function track(m, id)
+        if npcEspData[m] or not isNpcModel(m) then return end
+        task.spawn(function()
+            for _ = 1, 20 do
+                if npcEspId ~= id or npcEspData[m] then return end
+                local r = rootOf(m)
+                if r then
+                    npcEspData[m] = { root = r, bb = nil, label = nil }
+                    return
+                end
+                task.wait(0.1)
+            end
+        end)
+    end
+
+    local function build(d)
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "NpcESP"
+        bb.Size = UDim2.new(0, 190, 0, 22)
+        bb.AlwaysOnTop = true
+        bb.StudsOffsetWorldSpace = Vector3.new(0, 3.5, 0)
+        bb.Adornee = d.root
+        bb.Parent = d.root
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 13
+        label.TextColor3 = Color3.fromRGB(255, 150, 60)
+        label.TextStrokeTransparency = 0
+        label.Text = ""
+        label.Parent = bb
+
+        d.bb = bb
+        d.label = label
+    end
+
+    local function scanAll(id)
+        local n = 0
+        for _, d in ipairs(workspace:GetDescendants()) do
+            n = n + 1
+            if n % 500 == 0 then
+                task.wait()
+                if npcEspId ~= id then return end
+            end
+            if d:IsA("Humanoid") then
+                local m = d.Parent
+                if m then track(m, id) end
+            end
+        end
+    end
+
+    function setEspNpc(v)
+        CONFIG.ESP_NPC = v
+        npcEspId = npcEspId + 1
+        disconnectAll()
+        clearAll()
+        if not v then return end
+        local id = npcEspId
+
+        -- NPC yang sudah ada (bertahap supaya tidak lag)
+        task.spawn(scanAll, id)
+
+        -- NPC yang baru muncul langsung ikut
+        npcEspConns[#npcEspConns + 1] = workspace.DescendantAdded:Connect(function(d)
+            if npcEspId ~= id then return end
+            if d:IsA("Humanoid") then
+                local m = d.Parent
+                if m then track(m, id) end
+            elseif d:IsA("Model") and string.find(d.Name, "Disciple", 1, true) then
+                track(d, id)
+            end
+        end)
+
+        -- pemindaian cadangan tiap 20 detik
+        task.spawn(function()
+            while CONFIG.ENABLED and CONFIG.ESP_NPC and npcEspId == id do
+                task.wait(20)
+                if npcEspId ~= id then return end
+                pcall(scanAll, id)
+            end
+        end)
+
+        -- update tampilan
+        task.spawn(function()
+            while CONFIG.ENABLED and CONFIG.ESP_NPC and npcEspId == id do
+                local char = LocalPlayer.Character
+                local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+                local gone = {}
+
+                for m, d in pairs(npcEspData) do
+                    if not (m.Parent and d.root.Parent) then
+                        gone[#gone + 1] = m
+                    else
+                        local hum = m:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health <= 0 then
+                            gone[#gone + 1] = m
+                        elseif myRoot then
+                            local dist = (d.root.Position - myRoot.Position).Magnitude
+                            if dist <= CONFIG.ESP_NPC_RANGE then
+                                if not d.bb then build(d) end
+                                d.bb.Enabled = true
+                                local name = m.Name
+                                local text
+                                if hum and hum.DisplayName ~= "" then name = hum.DisplayName end
+                                text = name .. " | " .. math.floor(dist) .. "m"
+                                if hum and hum.MaxHealth > 0 then
+                                    text = text .. " | HP " .. math.floor(hum.Health / hum.MaxHealth * 100) .. "%"
+                                end
+                                d.label.Text = text
+                            elseif d.bb then
+                                d.bb.Enabled = false
+                            end
+                        end
+                    end
+                end
+
+                for _, m in ipairs(gone) do
+                    local d = npcEspData[m]
+                    if d and d.bb then pcall(function() d.bb:Destroy() end) end
+                    npcEspData[m] = nil
+                end
+
+                task.wait(0.3)
+            end
+            if npcEspId == id then clearAll() end
+        end)
+    end
+end
+
 -- Auto Cultivate (meditasi terus, berhenti sementara saat breakthrough)
 local setAutoMeditate
 do
@@ -2350,6 +2513,8 @@ local EspTab = createTab("ESP")
 addToggle(EspTab, "ESP Herb", CONFIG.ESP_HERB, setEspHerb)
 addToggle(EspTab, "ESP Player", CONFIG.ESP_PLAYERS, setEspPlayers)
 addToggle(EspTab, "ESP Chest", CONFIG.ESP_CHEST, setEspChest)
+addToggle(EspTab, "ESP NPC", CONFIG.ESP_NPC, setEspNpc)
+addStepper(EspTab, "ESP NPC Range", 50, 1000, 50, CONFIG.ESP_NPC_RANGE, function(v) CONFIG.ESP_NPC_RANGE = v end)
 
 -- Tab Cultivate
 local CultTab = createTab("Cultivate")
@@ -2489,6 +2654,7 @@ yesBtn.MouseButton1Click:Connect(function()
     setKillAura(false)
     setAutoBrew(false)
     setAutoMeditate(false)
+    setEspNpc(false)
     setAutoOrb(false)
     setEspChest(false)
     setKillAuraNpc(false)
