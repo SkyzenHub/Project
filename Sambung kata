@@ -1,0 +1,950 @@
+-- ============================================================
+-- SAMBUNG KATA PvP × SKYZENHUB UI
+-- ============================================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Remote (dari server)
+local RemoteFunction = ReplicatedStorage:WaitForChild("Services")
+    :WaitForChild("Communication")
+    :WaitForChild("event")
+    :WaitForChild("RemoteFunction")
+local RemoteUpdate = ReplicatedStorage:WaitForChild("SambungKataUpdate")
+
+------------------------------------------------------------
+-- PENGATURAN UI
+------------------------------------------------------------
+local TITLE = "SAMBUNG KATA PVP"
+local PHOTO_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/file_00000000f5548211add457d612909d05.png"
+local LOGO_URL = PHOTO_URL
+local LOADING_URL = "https://raw.githubusercontent.com/SkyzenHub/FOTO-SKYZEN/refs/heads/main/1794024795815.jpg"
+local LOAD_TIME = 4
+
+------------------------------------------------------------
+-- KONFIGURASI (disesuaikan)
+------------------------------------------------------------
+local CONFIG = {
+    ENABLED = true,
+    SOUND_ON = true,
+    AUTO_SCROLL = true,
+    SHOW_TIMER = true,
+}
+
+local SAVE_FILE = "SambungKata_PvP_Config.json"
+local SAVE_KEYS = {"SOUND_ON", "AUTO_SCROLL", "SHOW_TIMER"}
+local ConfigLocked = false
+
+local function LoadConfig()
+    if not (isfile and readfile) then return end
+    local ok, data = pcall(function()
+        if not isfile(SAVE_FILE) then return nil end
+        return HttpService:JSONDecode(readfile(SAVE_FILE))
+    end)
+    if ok and type(data) == "table" then
+        for _, key in ipairs(SAVE_KEYS) do
+            if type(data[key]) == type(CONFIG[key]) then CONFIG[key] = data[key] end
+        end
+    end
+end
+
+local function SaveNow()
+    if not writefile or ConfigLocked then return end
+    local data = {}
+    for _, key in ipairs(SAVE_KEYS) do data[key] = CONFIG[key] end
+    pcall(function() writefile(SAVE_FILE, HttpService:JSONEncode(data)) end)
+end
+
+local savePending = false
+local function SaveConfig()
+    if savePending then return end
+    savePending = true
+    task.delay(0.5, function() savePending = false SaveNow() end)
+end
+
+LoadConfig()
+
+------------------------------------------------------------
+-- STATE CLIENT
+------------------------------------------------------------
+local state = {
+    inMatch = false,
+    giliranKamu = false,
+    deadline = 0,
+    namaKamu = "",
+    namaLawan = "",
+    matchId = "",
+    menunggu = false,
+}
+local logCounter = 0
+
+------------------------------------------------------------
+-- UI SKYZENHUB STYLE (disederhanakan dari kode kamu)
+------------------------------------------------------------
+local parent = (gethui and gethui()) or PlayerGui
+if parent:FindFirstChild("SkyzenGUI") then parent.SkyzenGUI:Destroy() end
+
+local RED = Color3.fromRGB(0, 0, 0)
+local DARK = Color3.fromRGB(10, 10, 14)
+local GREY = Color3.fromRGB(60, 60, 70)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SkyzenGUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = parent
+
+local function isImage(data)
+    if type(data) ~= "string" or #data < 100 then return false end
+    local h = data:sub(1, 4)
+    return h == "\137PNG" or h:sub(1, 2) == "\255\216" or h == "RIFF"
+end
+
+local function loadImage(url, fname)
+    if url == "" then return nil end
+    if not writefile then return nil end
+    local getAsset = getcustomasset or getsynasset
+    if not getAsset then return nil end
+    local data
+    local req = (syn and syn.request) or request or http_request
+    if req then
+        local ok, res = pcall(function() return req({Url = url, Method = "GET"}) end)
+        if ok and res and isImage(res.Body) then data = res.Body end
+    end
+    if not data then
+        local ok, r = pcall(function() return game:HttpGet(url) end)
+        if ok and isImage(r) then data = r end
+    end
+    if not data then return nil end
+    pcall(writefile, fname, data)
+    local ok4, id = pcall(getAsset, fname)
+    if not ok4 or not id then return nil end
+    return id
+end
+
+local photoId = loadImage(PHOTO_URL, "skyzenhub_bg.png")
+local logoId = photoId
+if LOGO_URL ~= PHOTO_URL then logoId = loadImage(LOGO_URL, "skyzenhub_logo.png") end
+local loadingId = loadImage(LOADING_URL, "skyzenhub_loading.jpg") or photoId
+
+local function makeLogo(obj)
+    obj.BackgroundTransparency = 1
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3 = Color3.new(1, 1, 1)
+    bg.BorderSizePixel = 0
+    bg.ZIndex = 1
+    bg.Parent = obj
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(1, 0)
+    local g = Instance.new("UIGradient", bg)
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, RED),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, RED),
+    })
+    TS:Create(g, TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1), {Rotation = 360}):Play()
+    local st = Instance.new("UIStroke", bg)
+    st.Color = RED
+    st.Thickness = 1.5
+    if logoId then
+        local img = Instance.new("ImageLabel")
+        img.Size = UDim2.new(1, -4, 1, -4)
+        img.Position = UDim2.new(0, 2, 0, 2)
+        img.BackgroundTransparency = 1
+        img.Image = logoId
+        img.ScaleType = Enum.ScaleType.Crop
+        img.ZIndex = 2
+        img.Parent = obj
+        Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
+    else
+        local t = Instance.new("TextLabel")
+        t.Size = UDim2.new(1, 0, 1, 0)
+        t.BackgroundTransparency = 1
+        t.Text = "SK"
+        t.Font = Enum.Font.GothamBlack
+        t.TextScaled = true
+        t.TextColor3 = Color3.new(1, 1, 1)
+        t.ZIndex = 2
+        t.Parent = obj
+        Instance.new("UITextSizeConstraint", t).MaxTextSize = 20
+    end
+end
+
+-- ============== LOADING SCREEN ==============
+local loader = Instance.new("CanvasGroup")
+loader.Name = "Loader"
+loader.AnchorPoint = Vector2.new(0.5, 0.5)
+loader.Position = UDim2.new(0.5, 0, 0.5, 0)
+loader.Size = UDim2.new(0, 280, 0, 170)
+loader.BackgroundTransparency = 1
+loader.BorderSizePixel = 0
+loader.Active = true
+loader.ZIndex = 50
+loader.Parent = gui
+
+local lbg = Instance.new("Frame")
+lbg.Size = UDim2.new(1, 0, 1, 0)
+lbg.BackgroundColor3 = Color3.new(1, 1, 1)
+lbg.BorderSizePixel = 0
+lbg.Parent = loader
+Instance.new("UICorner", lbg).CornerRadius = UDim.new(0, 14)
+local lbgGrad = Instance.new("UIGradient", lbg)
+lbgGrad.Rotation = 90
+lbgGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 34)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 6, 10)),
+})
+local lbgStroke = Instance.new("UIStroke", lbg)
+lbgStroke.Color = RED
+lbgStroke.Thickness = 1.5
+TS:Create(lbgStroke, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.7}):Play()
+
+if loadingId then
+    local lImgBg = Instance.new("ImageLabel")
+    lImgBg.Size = UDim2.new(1, 0, 1, 0)
+    lImgBg.BackgroundTransparency = 1
+    lImgBg.Image = loadingId
+    lImgBg.ScaleType = Enum.ScaleType.Crop
+    lImgBg.ImageTransparency = 0.15
+    lImgBg.Parent = lbg
+    Instance.new("UICorner", lImgBg).CornerRadius = UDim.new(0, 14)
+    local lShade = Instance.new("Frame")
+    lShade.Size = UDim2.new(1, 0, 1, 0)
+    lShade.BackgroundColor3 = Color3.new(1, 1, 1)
+    lShade.BackgroundTransparency = 0.4
+    lShade.BorderSizePixel = 0
+    lShade.Parent = lbg
+    Instance.new("UICorner", lShade).CornerRadius = UDim.new(0, 14)
+end
+
+local lLogo = Instance.new("Frame")
+lLogo.AnchorPoint = Vector2.new(0.5, 0)
+lLogo.Position = UDim2.new(0.5, 0, 0, 18)
+lLogo.Size = UDim2.new(0, 56, 0, 56)
+lLogo.Parent = loader
+makeLogo(lLogo)
+
+local lTitle = Instance.new("TextLabel")
+lTitle.Position = UDim2.new(0, 0, 0, 82)
+lTitle.Size = UDim2.new(1, 0, 0, 24)
+lTitle.BackgroundTransparency = 1
+lTitle.Text = TITLE
+lTitle.Font = Enum.Font.GothamBlack
+lTitle.TextSize = 16
+lTitle.TextColor3 = Color3.fromRGB(0, 0, 0)
+lTitle.Parent = loader
+
+local lStatus = Instance.new("TextLabel")
+lStatus.Position = UDim2.new(0, 0, 0, 108)
+lStatus.Size = UDim2.new(1, 0, 0, 18)
+lStatus.BackgroundTransparency = 1
+lStatus.Text = "Initializing..."
+lStatus.Font = Enum.Font.GothamBlack
+lStatus.TextSize = 13
+lStatus.TextColor3 = Color3.fromRGB(0, 0, 0)
+lStatus.Parent = loader
+
+local lBar = Instance.new("Frame")
+lBar.AnchorPoint = Vector2.new(0.5, 0)
+lBar.Position = UDim2.new(0.5, 0, 0, 138)
+lBar.Size = UDim2.new(0, 220, 0, 6)
+lBar.BackgroundColor3 = Color3.fromRGB(80, 80, 90)
+lBar.BorderSizePixel = 0
+lBar.Parent = loader
+Instance.new("UICorner", lBar).CornerRadius = UDim.new(1, 0)
+
+local lFill = Instance.new("Frame")
+lFill.Size = UDim2.new(0, 0, 1, 0)
+lFill.BackgroundColor3 = RED
+lFill.BorderSizePixel = 0
+lFill.Parent = lBar
+Instance.new("UICorner", lFill).CornerRadius = UDim.new(1, 0)
+
+local function setProgress(p, text, dur)
+    lStatus.Text = text
+    TS:Create(lFill, TweenInfo.new(dur or 0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(p, 0, 1, 0)}):Play()
+end
+
+setProgress(0.2, "Initializing...", 1)
+task.wait(0.8)
+setProgress(0.5, "Building interface...", 0.8)
+
+-- ============== WINDOW UTAMA ==============
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 380, 0, 540)
+main.Position = UDim2.new(0.5, -190, 0.5, -270)
+main.BackgroundColor3 = DARK
+main.ClipsDescendants = true
+main.Visible = false
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+
+local grad = Instance.new("UIGradient", main)
+grad.Rotation = 90
+grad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 34)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 6, 10)),
+})
+
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = RED
+stroke.Thickness = 1.5
+TS:Create(stroke, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {Transparency = 0.7}):Play()
+
+if photoId then
+    local bgImg = Instance.new("ImageLabel")
+    bgImg.Size = UDim2.new(1, 0, 1, 0)
+    bgImg.BackgroundTransparency = 1
+    bgImg.Image = photoId
+    bgImg.ScaleType = Enum.ScaleType.Crop
+    bgImg.ImageTransparency = 0.75
+    bgImg.ZIndex = 1
+    bgImg.Parent = main
+    Instance.new("UICorner", bgImg).CornerRadius = UDim.new(0, 12)
+end
+
+-- Header
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 42)
+header.BackgroundTransparency = 1
+header.ZIndex = 3
+header.Parent = main
+
+local logo = Instance.new("Frame")
+logo.Size = UDim2.new(0, 30, 0, 30)
+logo.Position = UDim2.new(0, 10, 0, 6)
+logo.ZIndex = 3
+logo.Parent = header
+makeLogo(logo)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -130, 1, 0)
+title.Position = UDim2.new(0, 48, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = TITLE
+title.Font = Enum.Font.GothamBlack
+title.TextSize = 13
+title.TextColor3 = Color3.fromRGB(235, 235, 240)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.ZIndex = 3
+title.Parent = header
+
+local function topBtn(text, x)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 28, 0, 24)
+    b.Position = UDim2.new(1, x, 0, 9)
+    b.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.ZIndex = 3
+    b.Parent = header
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+local minBtn = topBtn("-", -66)
+local closeBtn = topBtn("X", -34)
+
+local line = Instance.new("Frame")
+line.Size = UDim2.new(1, -24, 0, 1)
+line.Position = UDim2.new(0, 12, 0, 44)
+line.BackgroundColor3 = GREY
+line.BorderSizePixel = 0
+line.ZIndex = 3
+line.Parent = main
+
+-- Tab bar
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -24, 0, 28)
+tabBar.Position = UDim2.new(0, 12, 0, 52)
+tabBar.BackgroundTransparency = 1
+tabBar.ZIndex = 3
+tabBar.Parent = main
+local tl = Instance.new("UIListLayout", tabBar)
+tl.FillDirection = Enum.FillDirection.Horizontal
+tl.Padding = UDim.new(0, 6)
+
+local pages = {}
+local tabButtons = {}
+
+local function selectTab(name)
+    for n, page in pairs(pages) do
+        page.Visible = (n == name)
+        tabButtons[n].BackgroundColor3 = (n == name) and RED or Color3.fromRGB(25, 25, 30)
+    end
+end
+
+local function createTab(name)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 100, 1, 0)
+    b.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    b.Text = name
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 11
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.ZIndex = 3
+    b.Parent = tabBar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    tabButtons[name] = b
+
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.new(1, -24, 1, -92)
+    page.Position = UDim2.new(0, 12, 0, 86)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 3
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.ZIndex = 3
+    page.Parent = main
+    Instance.new("UIListLayout", page).Padding = UDim.new(0, 6)
+    pages[name] = page
+
+    b.MouseButton1Click:Connect(function() selectTab(name) end)
+    return page
+end
+
+-- ============== KOMPONEN UI ==============
+local function addToggle(page, name, default, callback)
+    local st = default
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(55, 55, 64)
+    b.Font = Enum.Font.GothamBold
+    b.Text = ""
+    b.ZIndex = 3
+    b.Parent = page
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", b)
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(0, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    fill.BorderSizePixel = 0
+    fill.ZIndex = 3
+    fill.Parent = b
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 8)
+    local shine = Instance.new("UIGradient", fill)
+    shine.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(95, 95, 105)),
+        ColorSequenceKeypoint.new(0.3, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(0.7, Color3.fromRGB(0, 0, 0)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(95, 95, 105)),
+    })
+    local shimmer = nil
+
+    local txt = Instance.new("TextLabel")
+    txt.Size = UDim2.new(1, 0, 1, 0)
+    txt.BackgroundTransparency = 1
+    txt.Font = Enum.Font.GothamBold
+    txt.TextSize = 13
+    txt.TextColor3 = Color3.new(1, 1, 1)
+    txt.ZIndex = 4
+    txt.Parent = b
+
+    local function refresh(animate)
+        txt.Text = name .. "  :  " .. (st and "ON" or "OFF")
+        local goal = UDim2.new(st and 1 or 0, 0, 1, 0)
+        if animate then
+            TS:Create(fill, TweenInfo.new(0.35), {Size = goal}):Play()
+            TS:Create(s, TweenInfo.new(0.35), {Color = st and RED or GREY, Thickness = st and 2 or 1}):Play()
+        else
+            fill.Size = goal
+            s.Color = st and RED or GREY
+            s.Thickness = st and 2 or 1
+        end
+        if st and not shimmer then
+            shine.Offset = Vector2.new(-1, 0)
+            shimmer = TS:Create(shine, TweenInfo.new(1.4, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1), {Offset = Vector2.new(1, 0)})
+            shimmer:Play()
+        elseif not st and shimmer then
+            shimmer:Cancel(); shimmer = nil
+        end
+    end
+    refresh(false)
+
+    b.MouseButton1Click:Connect(function()
+        st = not st
+        refresh(true)
+        pcall(callback, st)
+        SaveConfig()
+    end)
+end
+
+local function addButton(page, text, color, callback)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 40)
+    b.BackgroundColor3 = color or Color3.fromRGB(60, 60, 70)
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.ZIndex = 3
+    b.Parent = page
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", b)
+    s.Color = GREY
+    b.MouseButton1Click:Connect(function()
+        pcall(callback)
+    end)
+    return b
+end
+
+local function addLabel(page, text, height, color)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, -6, 0, height or 25)
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.Font = Enum.Font.GothamBold
+    l.TextSize = 13
+    l.TextColor3 = color or Color3.fromRGB(220, 220, 225)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.ZIndex = 3
+    l.Parent = page
+    return l
+end
+
+local function addInfoBox(page, height)
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1, -6, 0, height)
+    f.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    f.BorderSizePixel = 0
+    f.ZIndex = 3
+    f.Parent = page
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", f)
+    s.Color = GREY
+    return f
+end
+
+-- ============== TAB 1: GAME ==============
+local GameTab = createTab("Game")
+
+-- Status
+local statusLabel = addLabel(GameTab, "Tekan Cari Lawan untuk mulai", 40, Color3.fromRGB(180, 220, 255))
+statusLabel.TextWrapped = true
+
+-- Panel skor (Frame khusus)
+local scoreFrame = Instance.new("Frame")
+scoreFrame.Size = UDim2.new(1, -6, 0, 65)
+scoreFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+scoreFrame.BorderSizePixel = 0
+scoreFrame.ZIndex = 3
+scoreFrame.Visible = false
+scoreFrame.Parent = GameTab
+Instance.new("UICorner", scoreFrame).CornerRadius = UDim.new(0, 8)
+local scoreStroke = Instance.new("UIStroke", scoreFrame)
+scoreStroke.Color = GREY
+
+local kamuLabel = Instance.new("TextLabel")
+kamuLabel.Size = UDim2.new(0.5, -5, 1, 0)
+kamuLabel.BackgroundTransparency = 1
+kamuLabel.Text = "Kamu\n0"
+kamuLabel.TextColor3 = Color3.fromRGB(120, 255, 150)
+kamuLabel.TextScaled = true
+kamuLabel.Font = Enum.Font.GothamBold
+kamuLabel.ZIndex = 4
+kamuLabel.Parent = scoreFrame
+
+local lawanLabel = Instance.new("TextLabel")
+lawanLabel.Size = UDim2.new(0.5, -5, 1, 0)
+lawanLabel.Position = UDim2.new(0.5, 5, 0, 0)
+lawanLabel.BackgroundTransparency = 1
+lawanLabel.Text = "Lawan\n0"
+lawanLabel.TextColor3 = Color3.fromRGB(255, 150, 200)
+lawanLabel.TextScaled = true
+lawanLabel.Font = Enum.Font.GothamBold
+lawanLabel.ZIndex = 4
+lawanLabel.Parent = scoreFrame
+
+-- Kata terakhir
+local kataTerakhirLabel = addLabel(GameTab, "Kata: -", 32, Color3.fromRGB(255, 255, 255))
+kataTerakhirLabel.BackgroundTransparency = 0
+kataTerakhirLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+kataTerakhirLabel.TextXAlignment = Enum.TextXAlignment.Center
+local ktlCorner = Instance.new("UICorner", kataTerakhirLabel); ktlCorner.CornerRadius = UDim.new(0, 6)
+
+-- Huruf sambung
+local hurufLabel = addLabel(GameTab, "Huruf sambung: -", 28, Color3.fromRGB(150, 220, 255))
+hurufLabel.TextXAlignment = Enum.TextXAlignment.Center
+
+-- Timer
+local timerLabel = addLabel(GameTab, "", 22, Color3.fromRGB(255, 200, 100))
+timerLabel.TextXAlignment = Enum.TextXAlignment.Center
+
+-- Input kata
+local inputBox = Instance.new("TextBox")
+inputBox.Size = UDim2.new(1, -6, 0, 38)
+inputBox.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+inputBox.BorderSizePixel = 0
+inputBox.PlaceholderText = "Ketik kata di sini..."
+inputBox.Text = ""
+inputBox.TextColor3 = Color3.new(1, 1, 1)
+inputBox.PlaceholderColor3 = Color3.fromRGB(180, 180, 180)
+inputBox.TextScaled = true
+inputBox.Font = Enum.Font.Gotham
+inputBox.ClearTextOnFocus = false
+inputBox.ZIndex = 3
+inputBox.Parent = GameTab
+Instance.new("UICorner", inputBox).CornerRadius = UDim.new(0, 8)
+
+-- Tombol Kirim
+local kirimBtn = addButton(GameTab, "📤 Kirim Kata", Color3.fromRGB(80, 200, 120), function()
+    if not state.inMatch or not state.giliranKamu then return end
+    local kata = inputBox.Text
+    if kata == "" then return end
+    inputBox.Text = ""
+    local ok, hasil = pcall(function()
+        return RemoteFunction:InvokeServer("kirimKata", kata)
+    end)
+    if not ok or type(hasil) ~= "table" then
+        tambahLog("⚠️ Gagal kirim.", Color3.fromRGB(255, 120, 120))
+        return
+    end
+    if not hasil.ok then
+        tambahLog("❌ " .. tostring(hasil.pesan), Color3.fromRGB(255, 120, 120))
+    end
+end)
+
+inputBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed and state.inMatch and state.giliranKamu then
+        local kata = inputBox.Text
+        if kata ~= "" then
+            local ok, hasil = pcall(function()
+                return RemoteFunction:InvokeServer("kirimKata", kata)
+            end)
+            if ok and type(hasil) == "table" and not hasil.ok then
+                tambahLog("❌ " .. tostring(hasil.pesan), Color3.fromRGB(255, 120, 120))
+            else
+                inputBox.Text = ""
+            end
+        end
+    end
+end)
+
+-- Tombol Cari Lawan
+local cariBtn = addButton(GameTab, "🔍 Cari Lawan", Color3.fromRGB(100, 160, 255), function()
+    if state.inMatch then return end
+    local ok, hasil = pcall(function()
+        return RemoteFunction:InvokeServer("cariLawan")
+    end)
+    if ok and type(hasil) == "table" then
+        if hasil.ok then
+            statusLabel.Text = "🔍 " .. tostring(hasil.pesan)
+        else
+            tambahLog("⚠️ " .. tostring(hasil.pesan), Color3.fromRGB(255, 120, 120))
+        end
+    end
+end)
+
+-- Tombol Menyerah
+local nyerahBtn = addButton(GameTab, "🏳️ Menyerah", Color3.fromRGB(220, 80, 80), function()
+    if not state.inMatch then return end
+    pcall(function() RemoteFunction:InvokeServer("menyerah") end)
+end)
+
+-- ============== TAB 2: LOG ==============
+local LogTab = createTab("Log")
+
+local logFrame = Instance.new("ScrollingFrame")
+logFrame.Size = UDim2.new(1, -6, 1, -10)
+logFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+logFrame.BorderSizePixel = 0
+logFrame.ScrollBarThickness = 4
+logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+logFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logFrame.ZIndex = 3
+logFrame.Parent = LogTab
+Instance.new("UICorner", logFrame).CornerRadius = UDim.new(0, 8)
+local logLayout = Instance.new("UIListLayout", logFrame)
+logLayout.Padding = UDim.new(0, 4)
+logLayout.SortOrder = Enum.SortOrder.LayoutOrder
+local logPad = Instance.new("UIPadding", logFrame)
+logPad.PaddingLeft = UDim.new(0, 8)
+logPad.PaddingTop = UDim.new(0, 8)
+logPad.PaddingRight = UDim.new(0, 8)
+
+local function tambahLog(teks, warna)
+    logCounter += 1
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -16, 0, 22)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = teks
+    lbl.TextColor3 = warna or Color3.fromRGB(220, 220, 220)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextSize = 14
+    lbl.Font = Enum.Font.Gotham
+    lbl.LayoutOrder = logCounter
+    lbl.ZIndex = 4
+    lbl.Parent = logFrame
+    if CONFIG.AUTO_SCROLL then
+        task.defer(function()
+            logFrame.CanvasPosition = Vector2.new(0, logFrame.AbsoluteCanvasSize.Y)
+        end)
+    end
+end
+
+local function bersihkanLog()
+    logFrame:ClearAllChildren()
+    local l = Instance.new("UIListLayout", logFrame)
+    l.Padding = UDim.new(0, 4); l.SortOrder = Enum.SortOrder.LayoutOrder
+    local p = Instance.new("UIPadding", logFrame)
+    p.PaddingLeft = UDim.new(0, 8); p.PaddingTop = UDim.new(0, 8); p.PaddingRight = UDim.new(0, 8)
+    logCounter = 0
+end
+
+-- ============== TAB 3: SETTINGS ==============
+local SetTab = createTab("Setting")
+
+addLabel(SetTab, "Pengaturan UI", 22, Color3.fromRGB(255, 220, 100))
+addToggle(SetTab, "Sound Effects", CONFIG.SOUND_ON, function(v) CONFIG.SOUND_ON = v end)
+addToggle(SetTab, "Auto Scroll Log", CONFIG.AUTO_SCROLL, function(v) CONFIG.AUTO_SCROLL = v end)
+addToggle(SetTab, "Show Timer", CONFIG.SHOW_TIMER, function(v)
+    CONFIG.SHOW_TIMER = v
+    timerLabel.Visible = v
+end)
+
+addLabel(SetTab, "Info", 22, Color3.fromRGB(255, 220, 100))
+addLabel(SetTab, "Sambung Kata PvP v1.0", 20)
+addLabel(SetTab, "Ketik kata yang diawali huruf terakhir.", 20, Color3.fromRGB(180, 180, 200))
+addLabel(SetTab, "Waktu 20 detik per giliran.", 20, Color3.fromRGB(180, 180, 200))
+
+selectTab("Game")
+
+-- ============== FUNGSI GILIRAN ==============
+local function setGiliran(aktif)
+    state.giliranKamu = aktif
+    inputBox.TextEditable = aktif
+    kirimBtn.Active = aktif
+    kirimBtn.BackgroundColor3 = aktif and Color3.fromRGB(80, 200, 120) or Color3.fromRGB(90, 90, 100)
+    if aktif then
+        statusLabel.Text = "⚡ GILIRANMU! Ketik kata sekarang."
+        statusLabel.TextColor3 = Color3.fromRGB(120, 255, 150)
+    else
+        statusLabel.Text = "⏳ Menunggu lawan..."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 200, 120)
+    end
+end
+
+-- ============== TIMER COUNTDOWN ==============
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if state.inMatch and state.deadline > 0 and CONFIG.SHOW_TIMER then
+            local sisa = state.deadline - os.clock()
+            if sisa > 0 then
+                timerLabel.Text = string.format("⏱ %.1f detik", sisa)
+                timerLabel.TextColor3 = (sisa < 5) and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(255, 200, 100)
+            else
+                timerLabel.Text = "⏱ Waktu habis!"
+            end
+        else
+            timerLabel.Text = ""
+        end
+    end
+end)
+
+-- ============== HANDLER UPDATE ==============
+RemoteUpdate.OnClientEvent:Connect(function(data)
+    if type(data) ~= "table" then return end
+
+    if data.tipe == "menunggu" then
+        state.menunggu = true
+        statusLabel.Text = "🔍 " .. tostring(data.pesan)
+
+    elseif data.tipe == "matchMulai" then
+        bersihkanLog()
+        state.inMatch = true
+        state.menunggu = false
+        state.namaKamu = data.namaKamu
+        state.namaLawan = data.namaLawan
+        state.matchId = data.matchId
+        scoreFrame.Visible = true
+        kamuLabel.Text = "Kamu\n0"
+        lawanLabel.Text = data.namaLawan .. "\n0"
+        kataTerakhirLabel.Text = "Kata: " .. tostring(data.kataPembuka)
+        hurufLabel.Text = "Huruf sambung: " .. tostring(data.hurufSambung):upper()
+        state.deadline = os.clock() + (data.waktu or 20)
+        tambahLog("🎮 Match dimulai! Lawan: " .. data.namaLawan, Color3.fromRGB(255, 220, 100))
+        tambahLog("Kata pembuka: " .. data.kataPembuka, Color3.fromRGB(220, 220, 220))
+        cariBtn.Text = "❌ Batal Cari"
+        setGiliran(data.giliranKamu)
+        selectTab("Game")
+
+    elseif data.tipe == "kata" then
+        local siapa = tostring(data.siapa)
+        local warna = (siapa == state.namaKamu)
+            and Color3.fromRGB(120, 255, 150)
+            or Color3.fromRGB(255, 150, 200)
+        tambahLog(string.format("[%s] %s", siapa, tostring(data.kata)), warna)
+        kataTerakhirLabel.Text = "Kata: " .. tostring(data.kata)
+        hurufLabel.Text = "Huruf sambung: " .. tostring(data.hurufSambung):upper()
+        if data.skor then
+            kamuLabel.Text = "Kamu\n" .. tostring(data.skor[1])
+            lawanLabel.Text = state.namaLawan .. "\n" .. tostring(data.skor[2])
+        end
+        state.deadline = os.clock() + (data.waktu or 20)
+        if data.giliranKamu ~= nil then
+            setGiliran(data.giliranKamu)
+        end
+
+    elseif data.tipe == "selesai" then
+        state.inMatch = false
+        state.menunggu = false
+        state.deadline = 0
+        scoreFrame.Visible = false
+        cariBtn.Text = "🔍 Cari Lawan"
+        setGiliran(false)
+        inputBox.TextEditable = false
+        timerLabel.Text = ""
+        tambahLog("🏁 SELESAI! Pemenang: " .. tostring(data.pemenang), Color3.fromRGB(255, 220, 100))
+        tambahLog("Alasan: " .. tostring(data.alasan), Color3.fromRGB(200, 200, 200))
+        if data.skor then
+            tambahLog(string.format("Skor — Kamu: %d | Lawan: %d", data.skor[1], data.skor[2]), Color3.fromRGB(180, 180, 255))
+        end
+        statusLabel.Text = (data.pemenang == state.namaKamu) and "🎉 KAMU MENANG!" or "💀 Kamu kalah."
+        statusLabel.TextColor3 = (data.pemenang == state.namaKamu)
+            and Color3.fromRGB(120, 255, 150)
+            or Color3.fromRGB(255, 120, 120)
+    end
+end)
+
+-- ============== IKON MINIMIZE ==============
+local icon = Instance.new("TextButton")
+icon.Size = UDim2.new(0, 50, 0, 50)
+icon.Position = UDim2.new(0, 15, 0.4, 0)
+icon.Text = ""
+icon.Visible = false
+icon.Parent = gui
+makeLogo(icon)
+
+minBtn.MouseButton1Click:Connect(function() main.Visible = false icon.Visible = true end)
+icon.MouseButton1Click:Connect(function() main.Visible = true icon.Visible = false end)
+
+-- ============== KONFIRMASI CLOSE ==============
+local confirm = Instance.new("Frame")
+confirm.Size = UDim2.new(1, 0, 1, 0)
+confirm.BackgroundColor3 = Color3.new(0, 0, 0)
+confirm.BackgroundTransparency = 0.35
+confirm.BorderSizePixel = 0
+confirm.Active = true
+confirm.Visible = false
+confirm.ZIndex = 20
+confirm.Parent = main
+
+local box = Instance.new("Frame")
+box.AnchorPoint = Vector2.new(0.5, 0.5)
+box.Position = UDim2.new(0.5, 0, 0.5, 0)
+box.Size = UDim2.new(0, 260, 0, 130)
+box.BackgroundColor3 = DARK
+box.ZIndex = 21
+box.Parent = confirm
+Instance.new("UICorner", box).CornerRadius = UDim.new(0, 10)
+local bs = Instance.new("UIStroke", box)
+bs.Color = GREY
+bs.Thickness = 1.5
+
+local ct = Instance.new("TextLabel")
+ct.Size = UDim2.new(1, -20, 0, 24)
+ct.Position = UDim2.new(0, 10, 0, 12)
+ct.BackgroundTransparency = 1
+ct.Text = "Tutup UI?"
+ct.Font = Enum.Font.GothamBlack
+ct.TextSize = 16
+ct.TextColor3 = Color3.fromRGB(235, 235, 240)
+ct.ZIndex = 22
+ct.Parent = box
+
+local cs = Instance.new("TextLabel")
+cs.Size = UDim2.new(1, -20, 0, 34)
+cs.Position = UDim2.new(0, 10, 0, 38)
+cs.BackgroundTransparency = 1
+cs.Text = "Match yang sedang berjalan akan tetap lanjut di server."
+cs.Font = Enum.Font.Gotham
+cs.TextSize = 12
+cs.TextWrapped = true
+cs.TextColor3 = Color3.fromRGB(190, 190, 200)
+cs.ZIndex = 22
+cs.Parent = box
+
+local function confirmBtn(text, x, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.5, -15, 0, 32)
+    b.Position = UDim2.new(x, x == 0 and 10 or 5, 1, -42)
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.ZIndex = 22
+    b.Parent = box
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    return b
+end
+local cancelBtn = confirmBtn("Batal", 0, Color3.fromRGB(35, 35, 42))
+local yesBtn = confirmBtn("Ya, Tutup", 0.5, RED)
+
+closeBtn.MouseButton1Click:Connect(function() confirm.Visible = true end)
+cancelBtn.MouseButton1Click:Connect(function() confirm.Visible = false end)
+yesBtn.MouseButton1Click:Connect(function()
+    if state.inMatch then
+        pcall(function() RemoteFunction:InvokeServer("menyerah") end)
+    end
+    if state.menunggu then
+        pcall(function() RemoteFunction:InvokeServer("batalCari") end)
+    end
+    SaveNow()
+    ConfigLocked = true
+    gui:Destroy()
+end)
+
+-- ============== DRAG ==============
+local function makeDraggable(handle, obj)
+    local dragging, start, startPos
+    handle.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            start = i.Position
+            startPos = obj.Position
+            i.Changed:Connect(function()
+                if i.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+            local d = i.Position - start
+            obj.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+end
+makeDraggable(header, main)
+makeDraggable(icon, icon)
+
+-- ============== SELESAIKAN LOADING ==============
+local loadStart = os.clock()
+setProgress(0.7, "Preparing features...", 0.6)
+task.wait(0.7)
+setProgress(0.9, "Almost ready...", 0.5)
+task.wait(0.6)
+setProgress(1, "Ready", 0.3)
+task.wait(0.4)
+
+local mainScale = Instance.new("UIScale", main)
+mainScale.Scale = 0.85
+main.Visible = true
+TS:Create(mainScale, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+TS:Create(loader, TweenInfo.new(0.35), {GroupTransparency = 1}):Play()
+task.wait(0.4)
+loader:Destroy()
+
+print("[SambungKata UI] Loaded.")
