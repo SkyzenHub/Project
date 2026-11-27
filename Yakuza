@@ -1,0 +1,306 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+
+-- Fungsi helper untuk menempatkan GUI dengan aman di executor
+local function getGuiParent()
+	if typeof(gethui) == "function" then
+		local ok, hui = pcall(gethui)
+		if ok and hui then
+			return hui
+		end
+	end
+	local okCore, coreGui = pcall(function()
+		return game:GetService("CoreGui")
+	end)
+	if okCore and coreGui then
+		return coreGui
+	end
+	return player:WaitForChild("PlayerGui")
+end
+
+local guiParent = getGuiParent()
+
+-- Bersihkan instance lama jika script dijalankan ulang
+for _, name in ipairs({ "KillAuraGui", "KillAuraRing" }) do
+	local oldGui = guiParent:FindFirstChild(name)
+	if oldGui then oldGui:Destroy() end
+	local oldRing = Workspace:FindFirstChild(name)
+	if oldRing then oldRing:Destroy() end
+end
+
+-- SESUAIKAN REMOTE EVENT SERANGAN DENGAN GAME ANDA
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local AuraEvent = Remotes:WaitForChild("Attack") -- Ganti sesuai nama RemoteEvent serangan
+
+-- Konfigurasi Kill Aura Otomatis
+local isRunning = false
+local auraRadius = 30 -- Radius jangkauan kill aura (dalam studs)
+local intervalSerang = 0.1 -- Jeda antar siklus serangan (detik)
+local mobFolder = Workspace -- Ganti ke Workspace:WaitForChild("Mobs") jika ada folder khusus
+local ringColor = Color3.fromRGB(255, 70, 70)
+
+-- Mode: "nearest_name" (kunci nama NPC terdekat) atau "all_mobs" (serang semua NPC hidup di radius)
+local autoMode = "nearest_name"
+local lockedTargetName = nil
+
+-- Fungsi memeriksa apakah model adalah NPC hidup yang valid
+local function isValidLivingNpc(objek: Instance, character: Model?): (boolean, BasePart?)
+	if not objek:IsA("Model") or objek == character then
+		return false, nil
+	end
+	if Players:GetPlayerFromCharacter(objek) then
+		return false, nil
+	end
+
+	local humanoid = objek:FindFirstChildOfClass("Humanoid")
+	local npcRoot = objek:FindFirstChild("HumanoidRootPart") or objek.PrimaryPart
+	if humanoid and npcRoot and humanoid.Health > 0 then
+		return true, npcRoot
+	end
+
+	return false, nil
+end
+
+-- Fungsi mencari nama NPC terdekat secara otomatis
+local function autoDetectNearestNpcName()
+	local character = player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return nil end
+
+	local bestName = nil
+	local shortestDistance = math.huge
+
+	for _, objek in ipairs(mobFolder:GetDescendants()) do
+		local ok, npcRoot = isValidLivingNpc(objek, character)
+		if ok and npcRoot then
+			local dist = (rootPart.Position - npcRoot.Position).Magnitude
+			if dist < shortestDistance then
+				shortestDistance = dist
+				bestName = objek.Name
+			end
+		end
+	end
+
+	return bestName
+end
+
+-- Membuat Part Ring Transparan
+local auraRing = Instance.new("Part")
+auraRing.Name = "KillAuraRing"
+auraRing.Shape = Enum.PartType.Cylinder
+auraRing.Material = Enum.Material.Neon
+auraRing.Color = ringColor
+auraRing.Transparency = 0.7
+auraRing.CanCollide = false
+auraRing.CanQuery = false
+auraRing.CanTouch = false
+auraRing.Anchored = true
+auraRing.CastShadow = false
+
+local thickness = 0.25
+local diameter = auraRadius * 2
+auraRing.Size = Vector3.new(thickness, diameter, diameter)
+
+local selectionBox = Instance.new("SelectionBox")
+selectionBox.Name = "AuraBorder"
+selectionBox.Color3 = ringColor
+selectionBox.LineThickness = 0.05
+selectionBox.SurfaceTransparency = 0.85
+selectionBox.SurfaceColor3 = ringColor
+selectionBox.Adornee = auraRing
+selectionBox.Parent = auraRing
+auraRing.Parent = nil
+
+-- Update posisi ring di bawah kaki karakter saat aktif
+RunService.RenderStepped:Connect(function()
+	if not isRunning then
+		if auraRing.Parent ~= nil then
+			auraRing.Parent = nil
+		end
+		return
+	end
+
+	local character = player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if rootPart and humanoid and humanoid.Health > 0 then
+		if auraRing.Parent ~= Workspace then
+			auraRing.Parent = Workspace
+		end
+
+		local hipHeight = humanoid.HipHeight > 0 and humanoid.HipHeight or 2
+		local groundY = rootPart.Position.Y - hipHeight - 0.8
+		auraRing.CFrame = CFrame.new(rootPart.Position.X, groundY, rootPart.Position.Z)
+			* CFrame.Angles(0, 0, math.rad(90))
+	else
+		auraRing.Parent = nil
+	end
+end)
+
+-- Fungsi mengambil target yang sesuai mode otomatis
+local function getTargetsInAura()
+	local character = player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return {} end
+
+	if autoMode == "nearest_name" and not lockedTargetName then
+		lockedTargetName = autoDetectNearestNpcName()
+	end
+
+	local targets = {}
+
+	for _, objek in ipairs(mobFolder:GetDescendants()) do
+		local ok, npcRoot = isValidLivingNpc(objek, character)
+		if ok and npcRoot then
+			local nameMatches = (autoMode == "all_mobs") or (lockedTargetName == nil) or (objek.Name == lockedTargetName)
+			if nameMatches then
+				local jarak = (rootPart.Position - npcRoot.Position).Magnitude
+				if jarak <= auraRadius then
+					table.insert(targets, objek)
+				end
+			end
+		end
+	end
+
+	-- Jika target terkunci sudah habis di area manapun, cari otomatis nama NPC terdekat baru
+	if autoMode == "nearest_name" and lockedTargetName and #targets == 0 then
+		local stillExistsSomewhere = false
+		for _, objek in ipairs(mobFolder:GetDescendants()) do
+			local ok = isValidLivingNpc(objek, character)
+			if ok and objek.Name == lockedTargetName then
+				stillExistsSomewhere = true
+				break
+			end
+		end
+		if not stillExistsSomewhere then
+			lockedTargetName = autoDetectNearestNpcName()
+		end
+	end
+
+	return targets
+end
+
+-- Pembuatan GUI Utama (Bisa Digeser)
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "KillAuraGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = guiParent
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 225, 0, 92)
+mainFrame.Position = UDim2.new(0.5, -112, 0.16, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(28, 30, 36)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 10)
+frameCorner.Parent = mainFrame
+
+-- Tombol On/Off
+local toggleButton = Instance.new("TextButton")
+toggleButton.Name = "ToggleButton"
+toggleButton.Size = UDim2.new(1, -16, 0, 40)
+toggleButton.Position = UDim2.new(0, 8, 0, 8)
+toggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.Font = Enum.Font.GothamBold
+toggleButton.TextSize = 13
+toggleButton.Text = "Auto Aura: OFF"
+toggleButton.Parent = mainFrame
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 8)
+toggleCorner.Parent = toggleButton
+
+-- Tombol Ganti Mode (Nearest Name / All Mobs)
+local modeButton = Instance.new("TextButton")
+modeButton.Name = "ModeButton"
+modeButton.Size = UDim2.new(1, -16, 0, 30)
+modeButton.Position = UDim2.new(0, 8, 0, 54)
+modeButton.BackgroundColor3 = Color3.fromRGB(52, 58, 70)
+modeButton.TextColor3 = Color3.fromRGB(235, 240, 250)
+modeButton.Font = Enum.Font.GothamSemibold
+modeButton.TextSize = 12
+modeButton.Text = "Mode: Nearest Name"
+modeButton.Parent = mainFrame
+
+local modeCorner = Instance.new("UICorner")
+modeCorner.CornerRadius = UDim.new(0, 7)
+modeCorner.Parent = modeButton
+
+local function refreshToggleLabel()
+	if not isRunning then
+		toggleButton.Text = "Auto Aura: OFF"
+		toggleButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+	else
+		toggleButton.BackgroundColor3 = Color3.fromRGB(50, 180, 80)
+		if autoMode == "nearest_name" then
+			toggleButton.Text = lockedTargetName and ("ON (" .. lockedTargetName .. ")") or "ON (Nearest Name)"
+		else
+			toggleButton.Text = "ON (All Mobs)"
+		end
+	end
+end
+
+local function refreshModeLabel()
+	if autoMode == "nearest_name" then
+		modeButton.Text = "Mode: Nearest Name"
+	else
+		modeButton.Text = "Mode: All Mobs"
+	end
+end
+
+-- Klik Tombol Mode untuk berpindah otomatis
+modeButton.MouseButton1Click:Connect(function()
+	if autoMode == "nearest_name" then
+		autoMode = "all_mobs"
+		lockedTargetName = nil
+	else
+		autoMode = "nearest_name"
+		lockedTargetName = autoDetectNearestNpcName()
+	end
+	refreshModeLabel()
+	refreshToggleLabel()
+end)
+
+-- Klik Tombol On/Off
+toggleButton.MouseButton1Click:Connect(function()
+	isRunning = not isRunning
+
+	if isRunning then
+		if autoMode == "nearest_name" then
+			lockedTargetName = autoDetectNearestNpcName()
+		end
+		refreshToggleLabel()
+
+		task.spawn(function()
+			while isRunning do
+				if autoMode == "nearest_name" then
+					refreshToggleLabel()
+				end
+
+				local targets = getTargetsInAura()
+				for _, target in ipairs(targets) do
+					if not isRunning then break end
+					pcall(function()
+						AuraEvent:FireServer(target)
+					end)
+				end
+				task.wait(intervalSerang)
+			end
+		end)
+	else
+		lockedTargetName = nil
+		refreshToggleLabel()
+		auraRing.Parent = nil
+	end
+end)
